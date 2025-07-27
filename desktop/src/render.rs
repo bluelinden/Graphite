@@ -104,9 +104,8 @@ pub(crate) struct GraphicsState {
 
 	// Cached texture for UI rendering
 	ui_texture: Option<wgpu::Texture>,
-	ui_bind_group: Option<wgpu::BindGroup>,
-	// Cached texture for node graph output
-	// viewport_texture: Option<wgpu::Texture>,
+	viewport_texture: Option<wgpu::Texture>,
+	bind_group: Option<wgpu::BindGroup>,
 	// // Returned from CEF js event callback
 	pub viewport_top_left: (u32, u32),
 }
@@ -161,6 +160,16 @@ impl GraphicsState {
 				},
 				wgpu::BindGroupLayoutEntry {
 					binding: 1,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
 					visibility: wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
 					count: None,
@@ -220,7 +229,8 @@ impl GraphicsState {
 			render_pipeline,
 			sampler,
 			ui_texture: None,
-			ui_bind_group: None,
+			viewport_texture: None,
+			bind_group: None,
 			viewport_top_left: (0, 0),
 		}
 	}
@@ -233,25 +243,39 @@ impl GraphicsState {
 		}
 	}
 
-	pub(crate) fn bind_texture(&mut self, texture: &wgpu::Texture) {
-		let bind_group = self.create_bindgroup(texture);
+	pub(crate) fn bind_ui_texture(&mut self, texture: &wgpu::Texture) {
+		let bind_group = self.create_bindgroup(texture, &self.viewport_texture.clone().unwrap_or(texture.clone()));
+
 		self.ui_texture = Some(texture.clone());
 
-		self.ui_bind_group = Some(bind_group);
+		self.bind_group = Some(bind_group);
 	}
 
-	fn create_bindgroup(&self, texture: &wgpu::Texture) -> wgpu::BindGroup {
-		let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+	pub(crate) fn bind_viewport_texture(&mut self, texture: &wgpu::Texture) {
+		let bind_group = self.create_bindgroup(&self.ui_texture.clone().unwrap_or(texture.clone()), texture);
+
+		self.viewport_texture = Some(texture.clone());
+
+		self.bind_group = Some(bind_group);
+	}
+
+	fn create_bindgroup(&self, ui_texture: &wgpu::Texture, viewport_texture: &wgpu::Texture) -> wgpu::BindGroup {
+		let ui_texture_view = ui_texture.create_view(&wgpu::TextureViewDescriptor::default());
+		let viewport_texture_view = viewport_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
 		self.context.device.create_bind_group(&wgpu::BindGroupDescriptor {
 			layout: &self.render_pipeline.get_bind_group_layout(0),
 			entries: &[
 				wgpu::BindGroupEntry {
 					binding: 0,
-					resource: wgpu::BindingResource::TextureView(&texture_view),
+					resource: wgpu::BindingResource::TextureView(&ui_texture_view),
 				},
 				wgpu::BindGroupEntry {
 					binding: 1,
+					resource: wgpu::BindingResource::TextureView(&viewport_texture_view),
+				},
+				wgpu::BindGroupEntry {
+					binding: 2,
 					resource: wgpu::BindingResource::Sampler(&self.sampler),
 				},
 			],
@@ -282,7 +306,7 @@ impl GraphicsState {
 			});
 
 			render_pass.set_pipeline(&self.render_pipeline);
-			if let Some(bind_group) = &self.ui_bind_group {
+			if let Some(bind_group) = &self.bind_group {
 				render_pass.set_bind_group(0, bind_group, &[]);
 				render_pass.draw(0..6, 0..1); // Draw 3 vertices for fullscreen triangle
 			} else {

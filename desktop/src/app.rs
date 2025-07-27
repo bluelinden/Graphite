@@ -110,7 +110,56 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 				)
 				.unwrap(),
 		);
-		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
+		let mut graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
+
+		let mut test_data = vec![0u8; 800 * 600 * 4];
+
+		for y in 0..600 {
+			for x in 0..800 {
+				let idx = (y * 800 + x) * 4;
+				test_data[idx] = (x * 255 / 800) as u8; // Blue
+				test_data[idx + 1] = (y * 255 / 600) as u8; // Green
+				test_data[idx + 2] = 255; // Red
+				test_data[idx + 3] = 255; // Alpha
+			}
+		}
+
+		let texture = self.wgpu_context.device.create_texture(&wgpu::TextureDescriptor {
+			label: Some("Viewport Texture"),
+			size: wgpu::Extent3d {
+				width: 800,
+				height: 600,
+				depth_or_array_layers: 1,
+			},
+			mip_level_count: 1,
+			sample_count: 1,
+			dimension: wgpu::TextureDimension::D2,
+			format: wgpu::TextureFormat::Bgra8UnormSrgb,
+			usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+			view_formats: &[],
+		});
+
+		self.wgpu_context.queue.write_texture(
+			wgpu::ImageCopyTexture {
+				texture: &texture,
+				mip_level: 0,
+				origin: wgpu::Origin3d::ZERO,
+				aspect: wgpu::TextureAspect::All,
+			},
+			test_data.as_slice(),
+			wgpu::ImageDataLayout {
+				offset: 0,
+				bytes_per_row: Some(4 * 800),
+				rows_per_image: Some(600),
+			},
+			wgpu::Extent3d {
+				width: 800,
+				height: 600,
+				depth_or_array_layers: 1,
+			},
+		);
+
+		graphics_state.bind_viewport_texture(&texture);
 
 		self.window = Some(window);
 		self.graphics_state = Some(graphics_state);
@@ -127,7 +176,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		match event {
 			CustomEvent::UiUpdate(texture) => {
 				if let Some(graphics_state) = self.graphics_state.as_mut() {
-					graphics_state.bind_texture(&texture);
+					graphics_state.bind_ui_texture(&texture);
 					graphics_state.resize(texture.width(), texture.height());
 				}
 				if let Some(window) = &self.window {
