@@ -56,6 +56,10 @@ impl WinitApp {
 
 	fn dispatch_message(&mut self, message: Message) {
 		let responses = self.editor.handle_message(message);
+		self.send_messages_to_editor(responses);
+	}
+
+	fn send_messages_to_editor(&mut self, responses: Vec<FrontendMessage>) {
 		if responses.is_empty() {
 			return;
 		}
@@ -68,12 +72,8 @@ impl WinitApp {
 			return;
 		};
 		let Some(arg_list) = process_message.argument_list() else { return };
-		// let buffer = bitcode::serialize(&responses).unwrap();
-		// dbg!(&responses);
 		let string = ron::to_string(&responses).unwrap();
-		// let string = serde_json::to_string(&responses).unwrap();
 		let buffer = string.as_bytes().to_vec();
-		// let _x: Vec<FrontendMessage> = ron::from_str(&string).unwrap();
 		let mut value = ::cef::binary_value_create(Some(&buffer));
 		arg_list.set_binary(0, value.as_mut());
 		frame.send_process_message(::cef::sys::cef_process_id_t::PID_RENDERER.into(), Some(&mut process_message));
@@ -91,6 +91,18 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		self.cef_context.work();
 
 		let (_has_run, texture) = futures::executor::block_on(graphite_editor::node_graph_executor::run_node_graph());
+		if _has_run {
+			let mut responses = VecDeque::new();
+			let err = self.editor.poll_node_graph_evaluation(&mut responses);
+			if let Err(e) = err {
+				tracing::error!("Error poling node graph: {}", e);
+			}
+			let frontend_messages = responses
+				.into_iter()
+				.flat_map(|response| if let Message::Frontend(frontend) = response { Some(frontend) } else { None })
+				.collect();
+			self.send_messages_to_editor(frontend_messages);
+		}
 		if let Some(texture) = texture
 			&& let Some(graphics_state) = &mut self.graphics_state
 		{
@@ -214,9 +226,13 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 					return;
 				};
 
-				if let Message::InputPreprocessor(InputPreprocessorMessage::WheelScroll { editor_mouse_state, modifier_keys }) = &message {
+				if let Message::InputPreprocessor(ipp_message) = &message {
 					if let Some(window) = &self.window {
 						window.request_redraw();
+					}
+					if let InputPreprocessorMessage::CurrentTime { .. } | InputPreprocessorMessage::PointerMove { .. } = &ipp_message {
+					} else {
+						println!("got ipp message: {:?}", &ipp_message.to_discriminant());
 					}
 				}
 				if let Message::InputPreprocessor(InputPreprocessorMessage::BoundsOfViewports { bounds_of_viewports }) = &message {

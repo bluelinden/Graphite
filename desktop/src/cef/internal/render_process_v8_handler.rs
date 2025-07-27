@@ -43,7 +43,9 @@ impl ImplV8Handler for BrowserProcessV8HandlerImpl {
 				frame.send_process_message(cef_process_id_t::PID_BROWSER.into(), Some(&mut process_message));
 			}
 			if name.to_string() == "readMessageData" {
-				let Ok(data) = self.receiver.lock().as_mut().unwrap().recv() else { return 0 };
+				let Ok(data) = self.receiver.lock().as_mut().unwrap().recv_timeout(std::time::Duration::from_millis(20)) else {
+					return 0;
+				};
 
 				let arg1 = arguments.unwrap().first().unwrap().as_ref().unwrap();
 				let size = arg1.array_buffer_byte_length();

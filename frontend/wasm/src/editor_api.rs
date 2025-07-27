@@ -236,6 +236,7 @@ impl EditorHandle {
 			let g = f.clone();
 
 			*g.borrow_mut() = Some(Closure::new(move |_timestamp| {
+				#[cfg(not(feature = "native"))]
 				wasm_bindgen_futures::spawn_local(poll_node_graph_evaluation());
 
 				if !EDITOR_HAS_CRASHED.load(Ordering::SeqCst) {
@@ -940,10 +941,6 @@ async fn poll_node_graph_evaluation() {
 	};
 
 	editor_and_handle(|editor, handle| {
-		#[cfg(feature = "native")]
-		handle.dispatch(PortfolioMessage::PollNodeGraphEvaluation);
-		#[cfg(feature = "native")]
-		return;
 		let mut messages = VecDeque::new();
 		if let Err(e) = editor.poll_node_graph_evaluation(&mut messages) {
 			// TODO: This is a hacky way to suppress the error, but it shouldn't be generated in the first place
