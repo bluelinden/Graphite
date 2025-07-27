@@ -89,22 +89,28 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		let timeout = Instant::now() + Duration::from_millis(10);
 		let wait_until = timeout.min(self.cef_schedule.unwrap_or(timeout));
 		self.cef_context.work();
-		event_loop.set_control_flow(ControlFlow::WaitUntil(wait_until));
-	}
-
-	fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
-		if let Some(schedule) = self.cef_schedule
-			&& schedule < Instant::now()
-		{
-			self.cef_schedule = None;
-			self.cef_context.work();
-		}
 
 		let (_has_run, texture) = futures::executor::block_on(graphite_editor::node_graph_executor::run_node_graph());
 		if let Some(texture) = texture
 			&& let Some(graphics_state) = &mut self.graphics_state
 		{
 			graphics_state.bind_viewport_texture(texture.texture.as_ref());
+		}
+
+		event_loop.set_control_flow(ControlFlow::WaitUntil(wait_until));
+	}
+
+	fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+		if let Some(schedule) = self.cef_schedule
+			&& schedule < Instant::now()
+		{
+			self.cef_schedule = None;
+			self.cef_context.work();
+		}
+		if let StartCause::ResumeTimeReached { .. } = cause {
+			if let Some(window) = &self.window {
+				window.request_redraw();
+			}
 		}
 	}
 
@@ -207,6 +213,12 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 					tracing::error!("Message could not be deserialized: {:?}", message);
 					return;
 				};
+
+				if let Message::InputPreprocessor(InputPreprocessorMessage::WheelScroll { editor_mouse_state, modifier_keys }) = &message {
+					if let Some(window) = &self.window {
+						window.request_redraw();
+					}
+				}
 				if let Message::InputPreprocessor(InputPreprocessorMessage::BoundsOfViewports { bounds_of_viewports }) = &message {
 					if let Some(graphic_state) = &mut self.graphics_state {
 						let window_size = self.window.as_ref().unwrap().inner_size();
@@ -218,20 +230,6 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 					}
 				}
 				self.dispatch_message(message);
-
-				// dbg!(&responses);
-				// for frontend_message in responses {
-				// 	let Ok(serialized_message) = serde_json::to_string(&frontend_message) else {
-				// 		tracing::error!("Failed to serialize frontend message in CustomEvent::MessageReceived");
-				// 		continue;
-				// 	};
-				// 	// let message = format!("window.sendMessageToFrontend(\'{serialized_message}\')");
-				// 	let message = format!("window.sendMessageToFrontend(\'{serialized_message}\')");
-				// 	dbg!(&message);
-				// 	let code = CefString::from(message.as_str());
-				// 	frame.execute_java_script(Some(&code), None, 0);
-				// 	self.cef_context.work();
-				// }
 			}
 		}
 	}
