@@ -8,8 +8,8 @@ use ::cef::ImplFrame;
 use ::cef::ImplListValue;
 use ::cef::ImplProcessMessage;
 use ::cef::process_message_create;
+use graph_craft::wasm_application_io::WasmApplicationIo;
 use graphite_editor::application::Editor;
-use graphite_editor::messages::portfolio::utility_types::Platform;
 use graphite_editor::messages::prelude::*;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -71,8 +71,9 @@ impl WinitApp {
 		// let buffer = bitcode::serialize(&responses).unwrap();
 		// dbg!(&responses);
 		let string = ron::to_string(&responses).unwrap();
+		// let string = serde_json::to_string(&responses).unwrap();
 		let buffer = string.as_bytes().to_vec();
-		let _x: Vec<FrontendMessage> = ron::from_str(&string).unwrap();
+		// let _x: Vec<FrontendMessage> = ron::from_str(&string).unwrap();
 		let mut value = ::cef::binary_value_create(Some(&buffer));
 		arg_list.set_binary(0, value.as_mut());
 		frame.send_process_message(::cef::sys::cef_process_id_t::PID_RENDERER.into(), Some(&mut process_message));
@@ -98,6 +99,8 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			self.cef_schedule = None;
 			self.cef_context.work();
 		}
+
+		if futures::executor::block_on(graphite_editor::node_graph_executor::run_node_graph()) {};
 	}
 
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -170,6 +173,10 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		// dbg!(self.editor.handle_message(GlobalsMessage::SetPlatform { platform }));
 		// self.dispatch_message(PortfolioMessage::Init.into());
 		graphite_editor::application::set_uuid_seed(42);
+
+		let application_io = WasmApplicationIo::new_with_context(self.wgpu_context.clone());
+
+		futures::executor::block_on(graphite_editor::node_graph_executor::replace_application_io(application_io));
 	}
 
 	fn user_event(&mut self, _: &ActiveEventLoop, event: CustomEvent) {

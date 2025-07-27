@@ -55,44 +55,7 @@ pub(crate) enum FrameBufferError {
 	InvalidSize { buffer_size: usize, expected_size: usize, width: usize, height: usize },
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct WgpuContext {
-	pub(crate) device: wgpu::Device,
-	pub(crate) queue: wgpu::Queue,
-	adapter: wgpu::Adapter,
-	instance: wgpu::Instance,
-}
-
-impl WgpuContext {
-	pub(crate) async fn new() -> Self {
-		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-			backends: wgpu::Backends::PRIMARY,
-			..Default::default()
-		});
-
-		let adapter = instance
-			.request_adapter(&wgpu::RequestAdapterOptions {
-				power_preference: wgpu::PowerPreference::default(),
-				compatible_surface: None,
-				force_fallback_adapter: false,
-			})
-			.await
-			.unwrap();
-
-		let (device, queue) = adapter
-			.request_device(&wgpu::DeviceDescriptor {
-				required_features: wgpu::Features::empty(),
-				required_limits: wgpu::Limits::default(),
-				label: None,
-				memory_hints: Default::default(),
-				..Default::default()
-			})
-			.await
-			.unwrap();
-
-		Self { device, queue, adapter, instance }
-	}
-}
+pub use wgpu_executor::Context as WgpuContext;
 
 #[derive(Debug)]
 pub(crate) struct GraphicsState {

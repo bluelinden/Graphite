@@ -20,6 +20,8 @@ graphite-editor = { path = "../editor", features = [
 	"vello",
 	"decouple-execution",
 ] }
+graph-craft = { workspace = true }
+wgpu-executor = { workspace = true }
 
 wgpu = { workspace = true }
 winit = { workspace = true, features = ["serde"] }

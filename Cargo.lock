@@ -1862,6 +1862,7 @@ dependencies = [
  "cef",
  "dirs",
  "futures",
+ "graph-craft",
  "graphite-editor",
  "include_dir",
  "ron 0.10.1",
@@ -1870,6 +1871,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wgpu",
+ "wgpu-executor",
  "winit",
 ]
 

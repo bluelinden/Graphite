@@ -47,10 +47,7 @@ impl ImplRenderProcessHandler for RenderProcessHandlerImpl {
 		let size = binary.size();
 		let ptr = binary.raw_data();
 		let buffer = unsafe { std::slice::from_raw_parts(ptr as *const u8, size) };
-		eprintln!("foo bar");
-		dbg!(size);
-		let err = self.sender.send(buffer.to_vec());
-		dbg!(err);
+		let _ = self.sender.send(buffer.to_vec());
 
 		1
 	}

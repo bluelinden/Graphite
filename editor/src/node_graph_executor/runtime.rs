@@ -134,9 +134,9 @@ impl NodeRuntime {
 	pub async fn run(&mut self) {
 		if self.editor_api.application_io.is_none() {
 			self.editor_api = WasmEditorApi {
-				#[cfg(not(test))]
+				#[cfg(all(not(test), target_arch = "wasm32"))]
 				application_io: Some(WasmApplicationIo::new().await.into()),
-				#[cfg(test)]
+				#[cfg(any(test, not(target_arch = "wasm32")))]
 				application_io: Some(WasmApplicationIo::new_offscreen().await.into()),
 				font_cache: self.editor_api.font_cache.clone(),
 				node_graph_message_sender: Box::new(self.sender.clone()),
@@ -393,6 +393,18 @@ pub async fn run_node_graph() -> bool {
 pub async fn replace_node_runtime(runtime: NodeRuntime) -> Option<NodeRuntime> {
 	let mut node_runtime = NODE_RUNTIME.lock();
 	node_runtime.replace(runtime)
+}
+pub async fn replace_application_io(application_io: WasmApplicationIo) {
+	let mut node_runtime = NODE_RUNTIME.lock();
+	if let Some(node_runtime) = &mut *node_runtime {
+		node_runtime.editor_api = WasmEditorApi {
+			font_cache: node_runtime.editor_api.font_cache.clone(),
+			application_io: Some(application_io.into()),
+			node_graph_message_sender: Box::new(node_runtime.sender.clone()),
+			editor_preferences: Box::new(node_runtime.editor_preferences.clone()),
+		}
+		.into();
+	}
 }
 
 /// Which node is inspected and which monitor node is used (if any) for the current execution
