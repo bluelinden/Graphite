@@ -1859,9 +1859,11 @@ name = "graphite-desktop"
 version = "0.1.0"
 dependencies = [
  "bitcode",
+ "bytemuck",
  "cef",
  "dirs",
  "futures",
+ "glam",
  "graph-craft",
  "graphite-editor",
  "include_dir",

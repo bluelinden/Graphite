@@ -65,6 +65,8 @@ pub(crate) struct GraphicsState {
 	render_pipeline: wgpu::RenderPipeline,
 	sampler: wgpu::Sampler,
 
+	viewport_offset: [f32; 2], // Offset for viewport rendering
+
 	// Cached texture for UI rendering
 	ui_texture: Option<wgpu::Texture>,
 	viewport_texture: Option<wgpu::Texture>,
@@ -144,7 +146,11 @@ impl GraphicsState {
 		let render_pipeline_layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 			label: Some("Render Pipeline Layout"),
 			bind_group_layouts: &[&texture_bind_group_layout],
-			push_constant_ranges: &[],
+			push_constant_ranges: &[wgpu::PushConstantRange {
+				stages: wgpu::ShaderStages::FRAGMENT,
+				range: 0..std::mem::size_of::<[f32; 2]>() as u32, // 2 floats for viewport offset
+			}],
+			..Default::default()
 		});
 
 		let render_pipeline = context.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -194,6 +200,7 @@ impl GraphicsState {
 			ui_texture: None,
 			viewport_texture: None,
 			bind_group: None,
+			viewport_offset: [200.0, 200.0],
 			viewport_top_left: (0, 0),
 		}
 	}
@@ -220,6 +227,10 @@ impl GraphicsState {
 		self.viewport_texture = Some(texture.clone());
 
 		self.bind_group = Some(bind_group);
+	}
+
+	pub(crate) fn set_viewport_offset(&mut self, offset: [f32; 2]) {
+		self.viewport_offset = offset;
 	}
 
 	fn create_bindgroup(&self, ui_texture: &wgpu::Texture, viewport_texture: &wgpu::Texture) -> wgpu::BindGroup {
@@ -269,6 +280,7 @@ impl GraphicsState {
 			});
 
 			render_pass.set_pipeline(&self.render_pipeline);
+			render_pass.set_push_constants(wgpu::ShaderStages::FRAGMENT, 0, bytemuck::cast_slice(&self.viewport_offset));
 			if let Some(bind_group) = &self.bind_group {
 				render_pass.set_bind_group(0, bind_group, &[]);
 				render_pass.draw(0..6, 0..1); // Draw 3 vertices for fullscreen triangle

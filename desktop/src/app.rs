@@ -125,9 +125,9 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		for y in 0..600 {
 			for x in 0..800 {
 				let idx = (y * 800 + x) * 4;
-				test_data[idx] = (x * 255 / 800) as u8; // Blue
-				test_data[idx + 1] = (y * 255 / 600) as u8; // Green
-				test_data[idx + 2] = 255; // Red
+				test_data[idx + 1] = (x * 255 / 800) as u8; // Blue
+				test_data[idx + 2] = (y * 255 / 600) as u8; // Green
+				test_data[idx] = 255; // Red
 				test_data[idx + 3] = 255; // Alpha
 			}
 		}
@@ -207,6 +207,16 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 					tracing::error!("Message could not be deserialized: {:?}", message);
 					return;
 				};
+				if let Message::InputPreprocessor(InputPreprocessorMessage::BoundsOfViewports { bounds_of_viewports }) = &message {
+					if let Some(graphic_state) = &mut self.graphics_state {
+						let window_size = self.window.as_ref().unwrap().inner_size();
+						let bounds = bounds_of_viewports[0].top_left.as_vec2() / glam::Vec2::new(window_size.width as f32, window_size.height as f32);
+						let bounds = bounds.to_array();
+						graphic_state.set_viewport_offset(bounds);
+					} else {
+						panic!("graphics state not intialized, viewport offset might be lost");
+					}
+				}
 				self.dispatch_message(message);
 
 				// dbg!(&responses);
