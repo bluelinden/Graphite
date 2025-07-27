@@ -69,7 +69,10 @@ impl WinitApp {
 		};
 		let Some(arg_list) = process_message.argument_list() else { return };
 		// let buffer = bitcode::serialize(&responses).unwrap();
-		let buffer = ron::to_string(&responses).unwrap().as_bytes().to_vec();
+		// dbg!(&responses);
+		let string = ron::to_string(&responses).unwrap();
+		let buffer = string.as_bytes().to_vec();
+		let _x: Vec<FrontendMessage> = ron::from_str(&string).unwrap();
 		let mut value = ::cef::binary_value_create(Some(&buffer));
 		arg_list.set_binary(0, value.as_mut());
 		frame.send_process_message(::cef::sys::cef_process_id_t::PID_RENDERER.into(), Some(&mut process_message));
@@ -114,9 +117,10 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 		tracing::info!("Winit window created and ready");
 
-		let platform = Platform::Linux;
-		dbg!(self.editor.handle_message(GlobalsMessage::SetPlatform { platform }));
-		self.dispatch_message(PortfolioMessage::Init.into());
+		// let platform = Platform::Linux;
+		// dbg!(self.editor.handle_message(GlobalsMessage::SetPlatform { platform }));
+		// self.dispatch_message(PortfolioMessage::Init.into());
+		graphite_editor::application::set_uuid_seed(42);
 	}
 
 	fn user_event(&mut self, _: &ActiveEventLoop, event: CustomEvent) {

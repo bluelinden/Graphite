@@ -213,17 +213,11 @@ impl EditorHandle {
 		}
 	}
 
-	#[cfg(feature = "native")]
-	#[wasm_bindgen(js_name = initAfterFrontendReady)]
-	pub fn init_after_frontend_ready(&self, platform: String) {
-		log::debug!("Init after frontend ready from rust");
-	}
 	// ========================================================================
 	// Add additional JS -> Rust wrapper functions below as needed for calling
 	// the backend from the web frontend.
 	// ========================================================================
 
-	#[cfg(not(feature = "native"))]
 	#[wasm_bindgen(js_name = initAfterFrontendReady)]
 	pub fn init_after_frontend_ready(&self, platform: String) {
 		// Send initialization messages
@@ -245,22 +239,15 @@ impl EditorHandle {
 				wasm_bindgen_futures::spawn_local(poll_node_graph_evaluation());
 
 				if !EDITOR_HAS_CRASHED.load(Ordering::SeqCst) {
-					editor_and_handle(|editor, handle| {
-						for message in editor.handle_message(InputPreprocessorMessage::CurrentTime {
+					editor_and_handle(|_, handle| {
+						handle.dispatch(InputPreprocessorMessage::CurrentTime {
 							timestamp: js_sys::Date::now() as u64,
-						}) {
-							handle.send_frontend_message_to_js(message);
-						}
-
-						for message in editor.handle_message(AnimationMessage::IncrementFrameCounter) {
-							handle.send_frontend_message_to_js(message);
-						}
+						});
+						handle.dispatch(AnimationMessage::IncrementFrameCounter);
 
 						// Used by auto-panning, but this could possibly be refactored in the future, see:
 						// <https://github.com/GraphiteEditor/Graphite/pull/2562#discussion_r2041102786>
-						for message in editor.handle_message(BroadcastMessage::TriggerEvent(BroadcastEvent::AnimationFrame)) {
-							handle.send_frontend_message_to_js(message);
-						}
+						handle.dispatch(BroadcastEvent::AnimationFrame);
 					});
 				}
 
