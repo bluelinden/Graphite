@@ -100,7 +100,12 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			self.cef_context.work();
 		}
 
-		if futures::executor::block_on(graphite_editor::node_graph_executor::run_node_graph()) {};
+		let (_has_run, texture) = futures::executor::block_on(graphite_editor::node_graph_executor::run_node_graph());
+		if let Some(texture) = texture
+			&& let Some(graphics_state) = &mut self.graphics_state
+		{
+			graphics_state.bind_viewport_texture(texture.texture.as_ref());
+		}
 	}
 
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
