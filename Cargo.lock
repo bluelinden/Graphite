@@ -2104,6 +2104,7 @@ dependencies = [
 name = "graphite-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytemuck",
  "cef",
  "derivative",

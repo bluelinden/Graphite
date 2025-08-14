@@ -9,7 +9,8 @@ use cef::{
 	Browser, Callback, CefString, Frame, ImplRequest, ImplResourceHandler, ImplResponse, ImplSchemeHandlerFactory, ImplSchemeRegistrar, Request, ResourceHandler, ResourceReadCallback, Response,
 	SchemeRegistrar, WrapResourceHandler, WrapSchemeHandlerFactory,
 };
-use include_dir::{Dir, include_dir};
+
+use crate::consts::EMBEDDED_FRONTEND;
 
 pub(crate) const GRAPHITE_SCHEME: &str = "graphite-static";
 pub(crate) const FRONTEND_DOMAIN: &str = "frontend";
@@ -65,8 +66,6 @@ impl ImplSchemeHandlerFactory for GraphiteSchemeHandlerFactory {
 	}
 }
 
-static FRONTEND: Dir = include_dir!("$CARGO_MANIFEST_DIR/../frontend/dist");
-
 struct GraphiteFrontendResourceHandler<'a> {
 	object: *mut RcImpl<_cef_resource_handler_t, Self>,
 	data: Option<RefCell<Iter<'a, u8>>>,
@@ -74,7 +73,7 @@ struct GraphiteFrontendResourceHandler<'a> {
 }
 impl<'a> GraphiteFrontendResourceHandler<'a> {
 	pub fn new(path: &str) -> Self {
-		let file = FRONTEND.get_file(path);
+		let file = EMBEDDED_FRONTEND.get_file(path);
 		let data = if let Some(file) = file {
 			Some(RefCell::new(file.contents().iter()))
 		} else {

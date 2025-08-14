@@ -1,6 +1,7 @@
 use crate::CustomEvent;
 use crate::WindowSize;
 use crate::consts::APP_NAME;
+use crate::consts::EMBEDDED_FRONTEND;
 use crate::dialogs::dialog_open_graphite_file;
 use crate::dialogs::dialog_save_file;
 use crate::dialogs::dialog_save_graphite_file;
@@ -129,6 +130,28 @@ impl WinitApp {
 				let FrontendMessage::TriggerVisitLink { url } = message else { unreachable!() };
 				if let Err(e) = open::that(&url) {
 					tracing::error!("Failed to open URL: {}: {}", url, e);
+				}
+			});
+		}
+
+		for message in responses.extract_if(.., |m| matches!(m, FrontendMessage::TriggerOpenEmbeddedFile { .. })) {
+			let _ = thread::spawn(move || {
+				let FrontendMessage::TriggerOpenEmbeddedFile { path } = message else { unreachable!() };
+				let result = EMBEDDED_FRONTEND
+					.get_file(&path)
+					.and_then(|file| file.contents_utf8())
+					.map(|data| {
+						use base64::prelude::*;
+						BASE64_STANDARD_NO_PAD.encode(data)
+					})
+					.map(|data| {
+						std::fs::write("test.txt", format!("data:text/plain;charset=utf-8;base64,{data}"));
+						open::that(format!("data:text/plain;charset=utf-8;base64,{data}"))
+					});
+
+				dbg!(&result);
+				if !matches!(result, Some(Ok(_))) {
+					tracing::error!("Failed to open embedded file: {}", path.display());
 				}
 			});
 		}

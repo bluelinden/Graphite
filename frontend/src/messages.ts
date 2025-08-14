@@ -936,6 +936,10 @@ export class TriggerVisitLink extends JsMessage {
 	url!: string;
 }
 
+export class TriggerOpenEmbeddedFile extends JsMessage {
+	path!: string;
+}
+
 export class TriggerTextCommit extends JsMessage {}
 
 export class TriggerTextCopy extends JsMessage {
@@ -1710,6 +1714,7 @@ export const messageMakers: Record<string, MessageMaker> = {
 	TriggerTextCommit,
 	TriggerTextCopy,
 	TriggerVisitLink,
+	TriggerOpenEmbeddedFile,
 	UpdateActiveDocument,
 	UpdateBox,
 	UpdateClickTargets,

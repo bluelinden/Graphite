@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::messages::layout::utility_types::widget_prelude::*;
 use crate::messages::prelude::*;
 
@@ -21,7 +23,6 @@ impl DialogLayoutHolder for LicensesDialog {
 			("GraphiteLogo", "Graphite Logo", "https://graphite.rs/logo/"),
 			("IconsGrid", "Graphite Icons", icons_license_link),
 			("License", "Graphite License", "https://graphite.rs/license/"),
-			("License", "Other Licenses", "/third-party-licenses.txt"),
 		];
 		let widgets = links
 			.into_iter()
@@ -32,6 +33,18 @@ impl DialogLayoutHolder for LicensesDialog {
 					.on_update(|_| FrontendMessage::TriggerVisitLink { url: url.into() }.into())
 					.widget_holder()
 			})
+			.chain(std::iter::once(
+				TextButton::new("Other Licenses")
+					.icon(Some("License".into()))
+					.flush(true)
+					.on_update(|_| {
+						FrontendMessage::TriggerOpenEmbeddedFile {
+							path: PathBuf::from("third-party-licenses.txt"),
+						}
+						.into()
+					})
+					.widget_holder(),
+			))
 			.collect();
 
 		Layout::WidgetLayout(WidgetLayout::new(vec![LayoutGroup::Column { widgets }]))

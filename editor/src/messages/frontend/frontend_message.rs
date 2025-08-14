@@ -116,6 +116,9 @@ pub enum FrontendMessage {
 	TriggerVisitLink {
 		url: String,
 	},
+	TriggerOpenEmbeddedFile {
+		path: PathBuf,
+	},
 
 	// Update prefix: give the frontend a new value or state for it to use
 	UpdateActiveDocument {
