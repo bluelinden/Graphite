@@ -302,7 +302,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			use windows::Win32::UI::WindowsAndMessaging::*;
 
 			let hwnd = match window.window_handle().unwrap().as_raw() {
-				RawWindowHandle::Win32(handle) => handle.hwnd,
+				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as isize),
 				_ => panic!("Not using Win32 window handle on Windows"),
 			};
 
