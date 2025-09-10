@@ -314,7 +314,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
-				SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+				let _ = SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 			}
 		}
 
