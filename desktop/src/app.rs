@@ -423,6 +423,7 @@ fn configure_window_decorations(window: &Window) {
 		use wgpu::rwh::HasWindowHandle;
 		use wgpu::rwh::RawWindowHandle;
 		use windows::Win32::Foundation::*;
+		use windows::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, MARGINS};
 		use windows::Win32::UI::WindowsAndMessaging::*;
 
 		let hwnd = match window.window_handle().unwrap().as_raw() {
@@ -439,6 +440,14 @@ fn configure_window_decorations(window: &Window) {
 			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
 			let _ = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+			let margins = MARGINS {
+				cxLeftWidth: 0,
+				cxRightWidth: 0,
+				cyTopHeight: 6,
+				cyBottomHeight: 0,
+			};
+			DwmExtendFrameIntoClientArea(hwnd, &margins);
 		}
 
 		println!("Configured window decorations for Windows");

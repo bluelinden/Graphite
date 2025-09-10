@@ -49,11 +49,12 @@ ash = { version = "0.38", optional = true }
 # Windows-specific dependencies
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
+	"Win32_Foundation",
 	"Win32_Graphics_Direct3D11",
 	"Win32_Graphics_Direct3D12",
 	"Win32_Graphics_Dxgi",
 	"Win32_Graphics_Dxgi_Common",
-	"Win32_Foundation",
+	"Win32_Graphics_Dwm",
 	"Win32_Graphics_Gdi",
 	"Win32_UI_Controls",
 	"Win32_UI_HiDpi",
