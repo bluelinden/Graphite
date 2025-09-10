@@ -309,8 +309,8 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			unsafe {
 				let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
 
-				style &= !WS_CAPTION.0;
-				style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
+				style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
+				style |= WS_THICKFRAME.0;
 
 				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
