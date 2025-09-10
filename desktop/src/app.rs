@@ -277,7 +277,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			.with_title(APP_NAME)
 			.with_min_inner_size(winit::dpi::LogicalSize::new(400, 300))
 			.with_inner_size(winit::dpi::LogicalSize::new(1200, 800))
-			// .with_decorations(false)
+			.with_decorations(false)
 			.with_resizable(true);
 
 		#[cfg(target_os = "linux")]
@@ -299,6 +299,8 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			use wgpu::rwh::HasWindowHandle;
 			use wgpu::rwh::RawWindowHandle;
 			use windows::Win32::Foundation::*;
+			use windows::Win32::Graphics::Gdi::*;
+			use windows::Win32::UI::Controls::*;
 			use windows::Win32::UI::WindowsAndMessaging::*;
 
 			let hwnd = match window.window_handle().unwrap().as_raw() {
@@ -309,12 +311,15 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			unsafe {
 				let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
 
-				// style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
-				// style |= WS_BORDER.0;
+				style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
+				style |= WS_BORDER.0;
 
 				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
-				let _ = SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+				let ok = SetWindowSubclass(hwnd, Some(borderless_subclass_proc), 1, 0).as_bool();
+				assert!(ok, "SetWindowSubclass failed");
+
+				let _ = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 			}
 		}
 
@@ -436,4 +441,60 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		// Notify cef of possible input events
 		self.cef_context.work();
 	}
+}
+
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Controls::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn borderless_subclass_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _subclass_id: usize, _ref_data: usize) -> LRESULT {
+	if msg == WM_NCHITTEST {
+		// Mouse position in screen coords from lparam
+		let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
+		let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+
+		let mut win_rect = RECT::default();
+		if GetWindowRect(hwnd, &mut win_rect).as_bool() {
+			let dpi = GetDpiForWindow(hwnd);
+			let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+			let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+
+			let on_left = x >= win_rect.left && x < win_rect.left + frame_x;
+			let on_right = x < win_rect.right && x >= win_rect.right - frame_x;
+			let on_top = y >= win_rect.top && y < win_rect.top + frame_y;
+			let on_bottom = y < win_rect.bottom && y >= win_rect.bottom - frame_y;
+
+			if on_top && on_left {
+				return LRESULT(HTTOPLEFT as isize);
+			}
+			if on_top && on_right {
+				return LRESULT(HTTOPRIGHT as isize);
+			}
+			if on_bottom && on_left {
+				return LRESULT(HTBOTTOMLEFT as isize);
+			}
+			if on_bottom && on_right {
+				return LRESULT(HTBOTTOMRIGHT as isize);
+			}
+
+			if on_left {
+				return LRESULT(HTLEFT as isize);
+			}
+			if on_right {
+				return LRESULT(HTRIGHT as isize);
+			}
+			if on_top {
+				return LRESULT(HTTOP as isize);
+			}
+			if on_bottom {
+				return LRESULT(HTBOTTOM as isize);
+			}
+		}
+	}
+	DefSubclassProc(hwnd, msg, wparam, lparam)
 }

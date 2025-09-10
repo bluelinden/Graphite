@@ -54,7 +54,9 @@ windows = { version = "0.58", features = [
 	"Win32_Graphics_Dxgi",
 	"Win32_Graphics_Dxgi_Common",
 	"Win32_Foundation",
+	"Win32_Graphics_Gdi",
 	"Win32_UI_WindowsAndMessaging",
+	"Win32_UI_Controls",
 ], optional = true }
 
 # macOS-specific dependencies
