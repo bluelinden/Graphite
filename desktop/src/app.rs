@@ -302,7 +302,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			use windows::Win32::UI::WindowsAndMessaging::*;
 
 			let hwnd = match window.window_handle().unwrap().as_raw() {
-				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as isize),
+				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
 				_ => panic!("Not using Win32 window handle on Windows"),
 			};
 
@@ -314,7 +314,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
-				SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+				SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 			}
 		}
 
