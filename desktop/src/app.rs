@@ -277,7 +277,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			.with_title(APP_NAME)
 			.with_min_inner_size(winit::dpi::LogicalSize::new(400, 300))
 			.with_inner_size(winit::dpi::LogicalSize::new(1200, 800))
-			.with_decorations(false)
+			// .with_decorations(false)
 			.with_resizable(true);
 
 		#[cfg(target_os = "linux")]
@@ -314,7 +314,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
-				SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+				SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
 			}
 		}
 
