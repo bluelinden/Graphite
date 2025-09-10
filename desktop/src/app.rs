@@ -301,6 +301,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			use windows::Win32::Foundation::*;
 			use windows::Win32::Graphics::Gdi::*;
 			use windows::Win32::UI::Controls::*;
+			use windows::Win32::UI::Shell::*;
 			use windows::Win32::UI::WindowsAndMessaging::*;
 
 			let hwnd = match window.window_handle().unwrap().as_raw() {
@@ -450,6 +451,8 @@ use windows::Win32::Graphics::Gdi::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Controls::*;
 #[cfg(target_os = "windows")]
+use windows::Win32::UI::HiDpi::*;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn borderless_subclass_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _subclass_id: usize, _ref_data: usize) -> LRESULT {
@@ -459,7 +462,7 @@ unsafe extern "system" fn borderless_subclass_proc(hwnd: HWND, msg: u32, wparam:
 		let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
 
 		let mut win_rect = RECT::default();
-		if GetWindowRect(hwnd, &mut win_rect).as_bool() {
+		if GetWindowRect(hwnd, &mut win_rect).is_ok() {
 			let dpi = GetDpiForWindow(hwnd);
 			let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 			let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
