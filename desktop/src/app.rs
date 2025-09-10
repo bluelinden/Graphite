@@ -433,12 +433,14 @@ fn configure_window_decorations(window: &Window) {
 		unsafe {
 			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
 
-			style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
-			style |= WS_SIZEBOX.0;
+			style &= !WS_CAPTION.0;
+			style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
 
 			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
-			let _ = SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+			let _ = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 		}
+
+		println!("Configured window decorations for Windows");
 	}
 }
