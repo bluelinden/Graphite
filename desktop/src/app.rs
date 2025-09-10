@@ -292,7 +292,33 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			}
 		}
 
-		let window = Arc::new(event_loop.create_window(window).unwrap());
+		let window = event_loop.create_window(window).unwrap();
+
+		#[cfg(target_os = "windows")]
+		{
+			use wgpu::rwh::HasWindowHandle;
+			use wgpu::rwh::RawWindowHandle;
+			use windows::Win32::Foundation::*;
+			use windows::Win32::UI::WindowsAndMessaging::*;
+
+			let hwnd = match window.window_handle().unwrap().as_raw() {
+				RawWindowHandle::Win32(handle) => handle.hwnd,
+				_ => panic!("Not using Win32 window handle on Windows"),
+			};
+
+			unsafe {
+				let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+
+				style &= !WS_CAPTION.0;
+				style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
+
+				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+
+				SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+			}
+		}
+
+		let window = Arc::new(window);
 		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
 
 		self.window = Some(window);
