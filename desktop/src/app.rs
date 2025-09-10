@@ -14,13 +14,13 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::dpi::PhysicalSize;
+use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::event_loop::ControlFlow;
 use winit::event_loop::EventLoopProxy;
+use winit::window::Window;
 use winit::window::WindowId;
-use winit::window::{ResizeDirection, Window};
 
 use crate::cef;
 
@@ -162,6 +162,7 @@ impl WinitApp {
 				if let Some(window) = &self.window {
 					window.set_maximized(maximized);
 					window.set_minimized(minimized);
+					configure_window_decorations(window);
 				}
 			}
 			DesktopFrontendMessage::DragWindow => {
@@ -433,7 +434,7 @@ fn configure_window_decorations(window: &Window) {
 			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
 
 			style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
-			style |= WS_BORDER.0;
+			style |= WS_SIZEBOX.0;
 
 			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
