@@ -453,6 +453,8 @@ use windows::Win32::UI::Controls::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::HiDpi::*;
 #[cfg(target_os = "windows")]
+use windows::Win32::UI::Shell::*;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn borderless_subclass_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _subclass_id: usize, _ref_data: usize) -> LRESULT {
