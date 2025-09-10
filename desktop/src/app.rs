@@ -14,13 +14,13 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::event_loop::ControlFlow;
 use winit::event_loop::EventLoopProxy;
-use winit::window::Window;
 use winit::window::WindowId;
+use winit::window::{ResizeDirection, Window};
 
 use crate::cef;
 
@@ -39,6 +39,7 @@ pub(crate) struct WinitApp {
 	web_communication_initialized: bool,
 	web_communication_startup_buffer: Vec<Vec<u8>>,
 	persistent_data: PersistentData,
+	cursor_position: PhysicalPosition<f64>,
 }
 
 impl WinitApp {
@@ -71,6 +72,7 @@ impl WinitApp {
 			web_communication_initialized: false,
 			web_communication_startup_buffer: Vec::new(),
 			persistent_data,
+			cursor_position: PhysicalPosition::default(),
 		}
 	}
 
@@ -293,37 +295,6 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		}
 
 		let window = event_loop.create_window(window).unwrap();
-
-		#[cfg(target_os = "windows")]
-		{
-			use wgpu::rwh::HasWindowHandle;
-			use wgpu::rwh::RawWindowHandle;
-			use windows::Win32::Foundation::*;
-			use windows::Win32::Graphics::Gdi::*;
-			use windows::Win32::UI::Controls::*;
-			use windows::Win32::UI::Shell::*;
-			use windows::Win32::UI::WindowsAndMessaging::*;
-
-			let hwnd = match window.window_handle().unwrap().as_raw() {
-				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
-				_ => panic!("Not using Win32 window handle on Windows"),
-			};
-
-			unsafe {
-				let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-
-				style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
-				style |= WS_BORDER.0;
-
-				SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-
-				let ok = SetWindowSubclass(hwnd, Some(borderless_subclass_proc), 1, 0).as_bool();
-				assert!(ok, "SetWindowSubclass failed");
-
-				let _ = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-			}
-		}
-
 		let window = Arc::new(window);
 		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
 
@@ -396,6 +367,47 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+		match &event {
+			WindowEvent::CursorMoved { position, .. } => {
+				self.cursor_position = *position;
+			}
+			WindowEvent::MouseInput {
+				state: ElementState::Pressed,
+				button: MouseButton::Left,
+				..
+			} => {
+				if let Some(window) = &self.window {
+					let size = window.inner_size();
+					let PhysicalPosition { x, y } = self.cursor_position;
+
+					let grip = 6.0;
+
+					let left = x <= grip;
+					let right = x >= size.width as f64 - grip;
+					let top = y <= grip;
+					let bottom = y >= size.height as f64 - grip;
+
+					let dir = match (left, right, top, bottom) {
+						(true, false, true, false) => Some(ResizeDirection::NorthWest),
+						(false, true, true, false) => Some(ResizeDirection::NorthEast),
+						(true, false, false, true) => Some(ResizeDirection::SouthWest),
+						(false, true, false, true) => Some(ResizeDirection::SouthEast),
+						(true, false, false, false) => Some(ResizeDirection::West),
+						(false, true, false, false) => Some(ResizeDirection::East),
+						(false, false, true, false) => Some(ResizeDirection::North),
+						(false, false, false, true) => Some(ResizeDirection::South),
+						_ => None,
+					};
+
+					if let Some(d) = dir {
+						let _ = window.drag_resize_window(d);
+						return; // don't pass event along
+					}
+				}
+			}
+			_ => {}
+		}
+
 		self.cef_context.handle_window_event(&event);
 
 		match event {
@@ -442,64 +454,4 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		// Notify cef of possible input events
 		self.cef_context.work();
 	}
-}
-
-#[cfg(target_os = "windows")]
-use windows::Win32::Foundation::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Gdi::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::Controls::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::HiDpi::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::Shell::*;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::*;
-#[cfg(target_os = "windows")]
-unsafe extern "system" fn borderless_subclass_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _subclass_id: usize, _ref_data: usize) -> LRESULT {
-	if msg == WM_NCHITTEST {
-		// Mouse position in screen coords from lparam
-		let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
-		let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
-
-		let mut win_rect = RECT::default();
-		if GetWindowRect(hwnd, &mut win_rect).is_ok() {
-			let dpi = GetDpiForWindow(hwnd);
-			let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-			let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-
-			let on_left = x >= win_rect.left && x < win_rect.left + frame_x;
-			let on_right = x < win_rect.right && x >= win_rect.right - frame_x;
-			let on_top = y >= win_rect.top && y < win_rect.top + frame_y;
-			let on_bottom = y < win_rect.bottom && y >= win_rect.bottom - frame_y;
-
-			if on_top && on_left {
-				return LRESULT(HTTOPLEFT as isize);
-			}
-			if on_top && on_right {
-				return LRESULT(HTTOPRIGHT as isize);
-			}
-			if on_bottom && on_left {
-				return LRESULT(HTBOTTOMLEFT as isize);
-			}
-			if on_bottom && on_right {
-				return LRESULT(HTBOTTOMRIGHT as isize);
-			}
-
-			if on_left {
-				return LRESULT(HTLEFT as isize);
-			}
-			if on_right {
-				return LRESULT(HTRIGHT as isize);
-			}
-			if on_top {
-				return LRESULT(HTTOP as isize);
-			}
-			if on_bottom {
-				return LRESULT(HTBOTTOM as isize);
-			}
-		}
-	}
-	DefSubclassProc(hwnd, msg, wparam, lparam)
 }
