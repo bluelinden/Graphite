@@ -39,7 +39,6 @@ pub(crate) struct WinitApp {
 	web_communication_initialized: bool,
 	web_communication_startup_buffer: Vec<Vec<u8>>,
 	persistent_data: PersistentData,
-	cursor_position: PhysicalPosition<f64>,
 }
 
 impl WinitApp {
@@ -72,7 +71,6 @@ impl WinitApp {
 			web_communication_initialized: false,
 			web_communication_startup_buffer: Vec::new(),
 			persistent_data,
-			cursor_position: PhysicalPosition::default(),
 		}
 	}
 
@@ -295,6 +293,9 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		}
 
 		let window = event_loop.create_window(window).unwrap();
+
+		configure_window_decorations(&window);
+
 		let window = Arc::new(window);
 		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
 
@@ -367,47 +368,6 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-		match &event {
-			WindowEvent::CursorMoved { position, .. } => {
-				self.cursor_position = *position;
-			}
-			WindowEvent::MouseInput {
-				state: ElementState::Pressed,
-				button: MouseButton::Left,
-				..
-			} => {
-				if let Some(window) = &self.window {
-					let size = window.inner_size();
-					let PhysicalPosition { x, y } = self.cursor_position;
-
-					let grip = 6.0;
-
-					let left = x <= grip;
-					let right = x >= size.width as f64 - grip;
-					let top = y <= grip;
-					let bottom = y >= size.height as f64 - grip;
-
-					let dir = match (left, right, top, bottom) {
-						(true, false, true, false) => Some(ResizeDirection::NorthWest),
-						(false, true, true, false) => Some(ResizeDirection::NorthEast),
-						(true, false, false, true) => Some(ResizeDirection::SouthWest),
-						(false, true, false, true) => Some(ResizeDirection::SouthEast),
-						(true, false, false, false) => Some(ResizeDirection::West),
-						(false, true, false, false) => Some(ResizeDirection::East),
-						(false, false, true, false) => Some(ResizeDirection::North),
-						(false, false, false, true) => Some(ResizeDirection::South),
-						_ => None,
-					};
-
-					if let Some(d) = dir {
-						let _ = window.drag_resize_window(d);
-						return; // don't pass event along
-					}
-				}
-			}
-			_ => {}
-		}
-
 		self.cef_context.handle_window_event(&event);
 
 		match event {
@@ -453,5 +413,31 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 		// Notify cef of possible input events
 		self.cef_context.work();
+	}
+}
+
+fn configure_window_decorations(window: &Window) {
+	#[cfg(target_os = "windows")]
+	{
+		use wgpu::rwh::HasWindowHandle;
+		use wgpu::rwh::RawWindowHandle;
+		use windows::Win32::Foundation::*;
+		use windows::Win32::UI::WindowsAndMessaging::*;
+
+		let hwnd = match window.window_handle().unwrap().as_raw() {
+			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+			_ => panic!("Not using Win32 window handle on Windows"),
+		};
+
+		unsafe {
+			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+
+			style &= !(WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
+			style |= WS_BORDER.0;
+
+			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+
+			let _ = SetWindowPos(hwnd, HWND(std::ptr::null_mut()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+		}
 	}
 }
