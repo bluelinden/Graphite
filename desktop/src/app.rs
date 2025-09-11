@@ -423,7 +423,8 @@ fn configure_window_decorations(window: &Window) {
 		use wgpu::rwh::HasWindowHandle;
 		use wgpu::rwh::RawWindowHandle;
 		use windows::Win32::Foundation::*;
-		use windows::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, MARGINS};
+		use windows::Win32::Graphics::Controls::MARGINS;
+		use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
 		use windows::Win32::UI::WindowsAndMessaging::*;
 
 		let hwnd = match window.window_handle().unwrap().as_raw() {
