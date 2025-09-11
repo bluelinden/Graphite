@@ -432,6 +432,8 @@ fn configure_window_decorations(window: &Window) {
 			_ => panic!("Not using Win32 window handle on Windows"),
 		};
 
+		const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+
 		unsafe {
 			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
 
@@ -444,7 +446,7 @@ fn configure_window_decorations(window: &Window) {
 				tracing::error!("Failed to set window pos: {:?}", e);
 			}
 
-			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(34), 0xFFFFFFFE as *const u32 as _, std::mem::size_of::<u32>() as u32) {
+			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(34), &DWMWA_COLOR_NONE as *const u32 as _, std::mem::size_of::<u32>() as u32) {
 				tracing::error!("Failed to set DWMWA_BORDER_COLOR: {:?}", e);
 			}
 		}
