@@ -432,7 +432,7 @@ fn configure_window_decorations(window: &Window) {
 			_ => panic!("Not using Win32 window handle on Windows"),
 		};
 
-		const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+		const DWMWA_COLOR_NONE: u32 = 0xFF00FFFE;
 
 		unsafe {
 			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
