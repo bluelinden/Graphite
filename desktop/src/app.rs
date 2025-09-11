@@ -312,6 +312,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 				_ => panic!("Not using Win32 window handle on Windows"),
 			};
 
+			ring::install(hwnd);
 			ring::create_ring(hwnd);
 			ring::sync_ring_to_main();
 		}
@@ -452,6 +453,26 @@ mod ring {
 
 	static mut MAIN: HWND = HWND(std::ptr::null_mut());
 	static mut RINGHWND: HWND = HWND(std::ptr::null_mut());
+
+	pub unsafe fn install(hwnd: HWND) {
+		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+		style &= !WS_CAPTION.0;
+		style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
+		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+
+		let _ = DwmIsCompositionEnabled();
+		let margins = MARGINS {
+			cxLeftWidth: 0,
+			cxRightWidth: 0,
+			cyTopHeight: 0,
+			cyBottomHeight: 0,
+		};
+		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+		OLD_WNDPROC = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+
+		SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+	}
 
 	pub unsafe fn create_ring(owner: HWND) {
 		MAIN = owner;
