@@ -60,8 +60,9 @@ windows = { version = "0.58.0", features = [
 	"Win32_UI_HiDpi",
 	"Win32_UI_Shell",
 	"Win32_UI_WindowsAndMessaging",
+	"System_LibraryLoader"
 ], optional = true }
-raw-window-handle = "0.5"
+raw-window-handle = "0.6"
 
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -391,7 +391,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			WindowEvent::Resized(PhysicalSize { width, height }) => {
 				let _ = self.window_size_sender.send(WindowSize::new(width as usize, height as usize));
 				self.cef_context.notify_of_resize();
-				ring::sync_ring_to_main();
+				unsafe { ring::sync_ring_to_main() };
 			}
 			WindowEvent::RedrawRequested => {
 				let Some(ref mut graphics_state) = self.graphics_state else { return };
@@ -436,15 +436,16 @@ mod ring {
 	use windows::Win32::{
 		Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
 		Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC},
+		System::LibraryLoader::GetModuleHandleW,
 		UI::WindowsAndMessaging::*,
 	};
-	use windows::w;
+	use windows::core::w;
 
 	// thickness of the *external* draggable ring (logical px)
 	const RING: i32 = 8;
 
-	static mut MAIN: HWND = HWND(0);
-	static mut RINGHWND: HWND = HWND(0);
+	static mut MAIN: HWND = HWND(std::ptr::null_mut());
+	static mut RINGHWND: HWND = HWND(std::ptr::null_mut());
 
 	pub unsafe fn create_ring(owner: HWND) {
 		MAIN = owner;
@@ -467,18 +468,8 @@ mod ring {
 		let style = WS_POPUP;
 
 		RINGHWND = CreateWindowExW(
-			ex,
-			class,
-			None,
-			style,
-			0,
-			0,
-			0,
-			0,
-			Some(owner), // owner, not parent
-			None,
-			hinst,
-			None,
+			ex, class, None, style, 0, 0, 0, 0, owner, // owner, not parent
+			None, hinst, None,
 		)
 		.unwrap();
 
@@ -487,13 +478,13 @@ mod ring {
 	}
 
 	pub unsafe fn sync_ring_to_main() {
-		if MAIN.0 == 0 || RINGHWND.0 == 0 {
+		if MAIN.0.is_null() || RINGHWND.0.is_null() {
 			return;
 		}
 
 		// Get the main window’s outer rect in screen coords
 		let mut rc: RECT = Default::default();
-		GetWindowRect(MAIN, &mut rc);
+		windows::Win32::UI::WindowsAndMessaging::GetWindowRect(MAIN, &mut rc);
 
 		// Expand by RING (DPI aware)
 		let scale = dpi_scale(MAIN);
@@ -511,19 +502,24 @@ mod ring {
 		unsafe {
 			match msg {
 				WM_LBUTTONDOWN => {
+					// Convert cursor to ring client coords
 					let mut pt = POINT {
 						x: GET_X_LPARAM(l.0),
 						y: GET_Y_LPARAM(l.0),
 					};
-					ClientToScreen(hwnd, &mut pt);
+					windows::Win32::UI::WindowsAndMessaging::ClientToScreen(hwnd, &mut pt);
 
+					// Figure out which edge/corner ring zone the mouse is in, then
+					// ask the MAIN window to start native sizing via WM_SYSCOMMAND/SC_SIZE.
 					let edge = edge_from_point(hwnd, pt);
 					if let Some(cmd) = edge_to_sc_size(edge) {
+						// Start the system sizing loop on the main window
 						PostMessageW(MAIN, WM_SYSCOMMAND, WPARAM(cmd as usize), LPARAM(0));
 					}
 					return LRESULT(0);
 				}
 				WM_NCHITTEST => {
+					// Make the cursor show the right resize arrows when hovering the ring.
 					let screen_x = GET_X_LPARAM(l.0);
 					let screen_y = GET_Y_LPARAM(l.0);
 					let edge = edge_from_point(hwnd, POINT { x: screen_x, y: screen_y });
@@ -546,6 +542,7 @@ mod ring {
 		}
 	}
 
+	// Map our edge id to SC_SIZE codes (WMSZ_*) for WM_SYSCOMMAND.
 	fn edge_to_sc_size(edge: i32) -> Option<u32> {
 		Some(match edge {
 			1 => SC_SIZE | WMSZ_LEFT as u32,
@@ -561,12 +558,14 @@ mod ring {
 	}
 
 	unsafe fn edge_from_point(hwnd: HWND, screen_pt: POINT) -> i32 {
+		// Get ring rect
 		let mut r: RECT = Default::default();
-		GetWindowRect(hwnd, &mut r);
+		windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut r);
 
 		let scale = dpi_scale(MAIN);
 		let g = (RING as f32 * scale) as i32;
 
+		// inner rect equals owner's rect (ring minus g on all sides)
 		let inner = RECT {
 			left: r.left + g,
 			top: r.top + g,
@@ -574,11 +573,13 @@ mod ring {
 			bottom: r.bottom - g,
 		};
 
+		// Which band are we in?
 		let left = screen_pt.x < inner.left;
 		let right = screen_pt.x >= inner.right;
 		let top = screen_pt.y < inner.top;
 		let bottom = screen_pt.y >= inner.bottom;
 
+		// corners first
 		if top && left {
 			return 5;
 		}
@@ -610,7 +611,7 @@ mod ring {
 	fn dpi_scale(hwnd: HWND) -> f32 {
 		unsafe {
 			let hdc = GetDC(hwnd);
-			if hdc.0 != 0 {
+			if !hdc.0.is_null() {
 				let dpi = GetDeviceCaps(hdc, LOGPIXELSX) as f32;
 				ReleaseDC(hwnd, hdc);
 				return dpi / 96.0;
@@ -619,6 +620,7 @@ mod ring {
 		1.0
 	}
 
+	// helpers for LPARAM unpack
 	const fn GET_X_LPARAM(lp: isize) -> i32 {
 		(lp & 0xFFFF) as i16 as i32
 	}
