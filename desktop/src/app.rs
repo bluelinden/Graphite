@@ -423,7 +423,7 @@ fn configure_window_decorations(window: &Window) {
 		use wgpu::rwh::HasWindowHandle;
 		use wgpu::rwh::RawWindowHandle;
 		use windows::Win32::Foundation::*;
-		use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, MARGINS};
+		use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute};
 		use windows::Win32::UI::Controls::MARGINS;
 		use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -445,7 +445,7 @@ fn configure_window_decorations(window: &Window) {
 			}
 
 			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(34), &0xFFFFFFFE as *const u32 as _, std::mem::size_of::<u32>() as u32) {
-				tracing::error!("Failed to set DWMWA_BORDER_COLOR: {:?}", hr);
+				tracing::error!("Failed to set DWMWA_BORDER_COLOR: {:?}", e);
 			}
 		}
 
