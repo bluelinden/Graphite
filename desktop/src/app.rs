@@ -465,7 +465,7 @@ mod ring {
 		let margins = MARGINS {
 			cxLeftWidth: 0,
 			cxRightWidth: 0,
-			cyTopHeight: 6,
+			cyTopHeight: 16,
 			cyBottomHeight: 0,
 		};
 		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
