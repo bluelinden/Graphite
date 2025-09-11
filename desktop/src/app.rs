@@ -471,8 +471,6 @@ mod ring {
 		};
 		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-		OLD_WNDPROC = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
-
 		SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
 	}
 
