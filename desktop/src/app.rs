@@ -312,10 +312,6 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 				_ => panic!("Not using Win32 window handle on Windows"),
 			};
 
-			let hwnd = match handle.as_raw() {
-				raw_window_handle::RawWindowHandle::Win32(h) => windows::Win32::Foundation::HWND(h.hwnd.get() as isize),
-				_ => return,
-			};
 			ring::create_ring(hwnd);
 			ring::sync_ring_to_main();
 		}
