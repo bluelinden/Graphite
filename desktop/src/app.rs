@@ -481,9 +481,9 @@ mod win {
 					return LRESULT(0);
 				}
 				WM_DESTROY => {
-					if let Some(old) = super::win::OLD_WNDPROC.take() {
-						let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, old);
-					}
+					// if let Some(old) = super::win::OLD_WNDPROC.take() {
+					// 	let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, old);
+					// }
 				}
 				_ => {}
 			}
