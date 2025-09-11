@@ -433,22 +433,136 @@ fn configure_window_decorations(window: &Window) {
 		};
 
 		unsafe {
-			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-
-			style &= !WS_CAPTION.0;
-			style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
-
-			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-
-			if let Err(e) = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED) {
-				tracing::error!("Failed to set window pos: {:?}", e);
-			}
-
-			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &DWMWA_COLOR_NONE as *const u32 as _, std::mem::size_of::<COLORREF>() as u32) {
-				tracing::error!("Failed to set DWMWA_BORDER_COLOR: {:?}", e);
-			}
+			win_custom_frame::install(hwnd);
 		}
 
 		println!("Configured window decorations for Windows");
+	}
+}
+
+#[cfg(target_os = "windows")]
+mod win_custom_frame {
+	use std::{mem::transmute, ptr::null_mut};
+	use windows::Win32::{
+		Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+		Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmIsCompositionEnabled, MARGINS},
+		UI::WindowsAndMessaging::*,
+	};
+
+	static mut OLD_WNDPROC: isize = 0;
+	const GRIP: i32 = 8;
+
+	pub unsafe fn install(hwnd: HWND) {
+		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+		style &= !WS_CAPTION.0;
+		style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
+		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+
+		let mut enabled = BOOL(0);
+		let _ = DwmIsCompositionEnabled(&mut enabled);
+		let margins = MARGINS {
+			cxLeftWidth: 0,
+			cxRightWidth: 0,
+			cyTopHeight: 0,
+			cyBottomHeight: 0,
+		};
+		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+		OLD_WNDPROC = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+
+		SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+	}
+
+	extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+		unsafe {
+			match msg {
+				WM_NCCALCSIZE => {
+					if w.0 != 0 {
+						return LRESULT(0);
+					}
+				}
+
+				WM_NCHITTEST => {
+					let mut pt = POINT {
+						x: (l.0 as i16) as i32,
+						y: ((l.0 >> 16) as i16) as i32,
+					};
+					ScreenToClient(hwnd, &mut pt);
+
+					let mut rc: RECT = RECT::default();
+					GetClientRect(hwnd, &mut rc);
+
+					let scale = get_scale(hwnd);
+					let grip = ((GRIP as f32) * scale) as i32;
+					let titlebar = ((TITLEBAR as f32) * scale) as i32;
+
+					let left = pt.x < rc.left + grip;
+					let right = pt.x >= rc.right - grip;
+					let top = pt.y < rc.top + grip;
+					let bottom = pt.y >= rc.bottom - grip;
+
+					if top && left {
+						return LRESULT(HTTOPLEFT as isize);
+					}
+					if top && right {
+						return LRESULT(HTTOPRIGHT as isize);
+					}
+					if bottom && left {
+						return LRESULT(HTBOTTOMLEFT as isize);
+					}
+					if bottom && right {
+						return LRESULT(HTBOTTOMRIGHT as isize);
+					}
+
+					if left {
+						return LRESULT(HTLEFT as isize);
+					}
+					if right {
+						return LRESULT(HTRIGHT as isize);
+					}
+					if top {
+						return LRESULT(HTTOP as isize);
+					}
+					if bottom {
+						return LRESULT(HTBOTTOM as isize);
+					}
+
+					return LRESULT(HTCLIENT as isize);
+				}
+
+				WM_DWMCOMPOSITIONCHANGED | WM_THEMECHANGED => {
+					let margins = MARGINS {
+						cxLeftWidth: 0,
+						cxRightWidth: 0,
+						cyTopHeight: 0,
+						cyBottomHeight: 0,
+					};
+					let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+					return LRESULT(0);
+				}
+
+				WM_DESTROY => {
+					if OLD_WNDPROC != 0 {
+						let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, OLD_WNDPROC);
+						OLD_WNDPROC = 0;
+					}
+				}
+				_ => {}
+			}
+
+			CallWindowProcW(transmute(OLD_WNDPROC), hwnd, msg, w, l)
+		}
+	}
+
+	fn get_scale(hwnd: HWND) -> f32 {
+		unsafe {
+			let hdc = GetDC(hwnd);
+			if hdc.0 != 0 {
+				let dpi = GetDeviceCaps(hdc, LOGPIXELSX) as f32;
+				ReleaseDC(hwnd, hdc);
+				return dpi / 96.0;
+			}
+		}
+		1.0
 	}
 }
