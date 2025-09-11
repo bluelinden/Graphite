@@ -444,7 +444,7 @@ fn configure_window_decorations(window: &Window) {
 				tracing::error!("Failed to set window pos: {:?}", e);
 			}
 
-			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(34), &0xFFFFFFFE as *const u32 as _, std::mem::size_of::<u32>() as u32) {
+			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(34), 0xFFFFFFFE as *const u32 as _, std::mem::size_of::<u32>() as u32) {
 				tracing::error!("Failed to set DWMWA_BORDER_COLOR: {:?}", e);
 			}
 		}
