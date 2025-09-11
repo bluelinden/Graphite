@@ -445,7 +445,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 #[cfg(target_os = "windows")]
 mod ring {
-	use windows::Win32::{Foundation::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*};
+	use windows::Win32::{Foundation::*, Graphics::Dwm::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::Controls::*, UI::WindowsAndMessaging::*};
 	use windows::core::w;
 
 	// thickness of the *external* draggable ring (logical px)
@@ -453,6 +453,8 @@ mod ring {
 
 	static mut MAIN: HWND = HWND(std::ptr::null_mut());
 	static mut RINGHWND: HWND = HWND(std::ptr::null_mut());
+
+	static mut OLD_WNDPROC: isize = 0;
 
 	pub unsafe fn install(hwnd: HWND) {
 		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
