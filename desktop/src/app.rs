@@ -467,7 +467,7 @@ mod win {
 		let margins = MARGINS {
 			cxLeftWidth: 0,
 			cxRightWidth: 0,
-			cyTopHeight: 6,
+			cyTopHeight: 0,
 			cyBottomHeight: 0,
 		};
 		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
