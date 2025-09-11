@@ -557,7 +557,7 @@ mod win_custom_frame {
 	fn get_scale(hwnd: HWND) -> f32 {
 		unsafe {
 			let hdc = GetDC(hwnd);
-			if hdc.0 != 0 {
+			if hdc.0 != std::ptr::null_mut() {
 				let dpi = GetDeviceCaps(hdc, LOGPIXELSX) as f32;
 				ReleaseDC(hwnd, hdc);
 				return dpi / 96.0;
