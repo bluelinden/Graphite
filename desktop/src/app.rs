@@ -163,7 +163,9 @@ impl WinitApp {
 					window.set_maximized(maximized);
 					window.set_minimized(minimized);
 					#[cfg(target_os = "windows")]
-					ring::sync_ring_to_main();
+					unsafe {
+						ring::sync_ring_to_main()
+					};
 				}
 			}
 			DesktopFrontendMessage::DragWindow => {
@@ -298,8 +300,18 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 		#[cfg(target_os = "windows")]
 		unsafe {
-			// Create draggable ring outside window bounds
-			let handle = window.window_handle().unwrap();
+			use wgpu::rwh::HasWindowHandle;
+			use wgpu::rwh::RawWindowHandle;
+			use windows::Win32::Foundation::*;
+			use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DwmSetWindowAttribute};
+			use windows::Win32::UI::Controls::MARGINS;
+			use windows::Win32::UI::WindowsAndMessaging::*;
+
+			let hwnd = match window.window_handle().unwrap().as_raw() {
+				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+				_ => panic!("Not using Win32 window handle on Windows"),
+			};
+
 			let hwnd = match handle.as_raw() {
 				raw_window_handle::RawWindowHandle::Win32(h) => windows::Win32::Foundation::HWND(h.hwnd.get() as isize),
 				_ => return,
@@ -391,7 +403,10 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			WindowEvent::Resized(PhysicalSize { width, height }) => {
 				let _ = self.window_size_sender.send(WindowSize::new(width as usize, height as usize));
 				self.cef_context.notify_of_resize();
-				unsafe { ring::sync_ring_to_main() };
+				#[cfg(target_os = "windows")]
+				unsafe {
+					ring::sync_ring_to_main()
+				};
 			}
 			WindowEvent::RedrawRequested => {
 				let Some(ref mut graphics_state) = self.graphics_state else { return };
