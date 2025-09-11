@@ -162,7 +162,6 @@ impl WinitApp {
 				if let Some(window) = &self.window {
 					window.set_maximized(maximized);
 					window.set_minimized(minimized);
-					configure_window_decorations(window);
 				}
 			}
 			DesktopFrontendMessage::DragWindow => {
@@ -433,22 +432,7 @@ fn configure_window_decorations(window: &Window) {
 		};
 
 		unsafe {
-			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-
-			style &= !WS_CAPTION.0;
-			style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
-
-			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-
-			let _ = SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-
-			let margins = MARGINS {
-				cxLeftWidth: 0,
-				cxRightWidth: 0,
-				cyTopHeight: 6,
-				cyBottomHeight: 0,
-			};
-			DwmExtendFrameIntoClientArea(hwnd, &margins);
+			win::init(hwnd);
 		}
 
 		println!("Configured window decorations for Windows");
@@ -460,7 +444,8 @@ mod win {
 	use super::*;
 	use windows::Win32::{
 		Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
-		Graphics::Dwm::{DwmExtendFrameIntoClientArea, MARGINS},
+		Graphics::Dwm::DwmExtendFrameIntoClientArea,
+		UI::Controls::MARGINS,
 		UI::WindowsAndMessaging::*,
 	};
 
@@ -475,7 +460,7 @@ mod win {
 		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
 		OLD_WNDPROC = Some(prev);
 
-		SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+		SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 	}
 
 	unsafe fn remove_top_glass(hwnd: HWND) {
