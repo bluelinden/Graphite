@@ -454,3 +454,58 @@ fn configure_window_decorations(window: &Window) {
 		println!("Configured window decorations for Windows");
 	}
 }
+
+#[cfg(target_os = "windows")]
+mod win {
+	use super::*;
+	use windows::Win32::{
+		Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
+		Graphics::Dwm::{DwmExtendFrameIntoClientArea, MARGINS},
+		UI::WindowsAndMessaging::*,
+	};
+
+	static mut OLD_WNDPROC: Option<isize> = None;
+
+	pub unsafe fn init(hwnd: HWND) {
+		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+		style &= !WS_CAPTION.0;
+		style |= WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0;
+		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+		remove_top_glass(hwnd);
+		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+		OLD_WNDPROC = Some(prev);
+
+		SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+	}
+
+	unsafe fn remove_top_glass(hwnd: HWND) {
+		let margins = MARGINS {
+			cxLeftWidth: 0,
+			cxRightWidth: 0,
+			cyTopHeight: 6,
+			cyBottomHeight: 0,
+		};
+		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+	}
+
+	extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+		unsafe {
+			match msg {
+				WM_DWMCOMPOSITIONCHANGED => {
+					remove_top_glass(hwnd);
+					return LRESULT(0);
+				}
+				WM_DESTROY => {
+					if let Some(old) = super::win::OLD_WNDPROC.take() {
+						let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, old);
+					}
+				}
+				_ => {}
+			}
+
+			// Forward unhandled messages to the original WNDPROC.
+			let orig = OLD_WNDPROC.unwrap_or_default();
+			CallWindowProcW(transmute(orig), hwnd, msg, wparam, lparam)
+		}
+	}
+}
