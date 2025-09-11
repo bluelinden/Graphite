@@ -754,13 +754,9 @@ mod hybrid_chrome {
 				SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
 				return LRESULT(1);
 			}
+			WM_ERASEBKGND => return LRESULT(1),
 
-			WM_ERASEBKGND => {
-				// Invisible ring; nothing to paint
-				return LRESULT(1);
-			}
-
-			// Let the system know which HT* we are under the cursor
+			// Still report which part we're over.
 			WM_NCHITTEST => {
 				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
 				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
@@ -768,37 +764,57 @@ mod hybrid_chrome {
 				return LRESULT(ht as isize);
 			}
 
-			// Forward non-client mouse to the OWNER so its DefWindowProc starts move/resize.
-			WM_NCLBUTTONDOWN | WM_NCMOUSEMOVE | WM_NCLBUTTONUP => {
+			// Any non-client mouse press should start the system operation on the OWNER.
+			WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_NCMBUTTONDOWN => {
 				let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const HelperData;
 				let owner = if !data.is_null() { (*data).owner } else { HWND::default() };
 
-				// Where are we? (screen coords)
-				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
-				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
-				let ht = helper_hit(hwnd, sx, sy);
+				if owner.0 != std::ptr::null_mut() {
+					let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+					let ht = helper_hit(hwnd, sx, sy);
 
-				if ht != HTTRANSPARENT as u32 && ht as u32 != HTCLIENT && owner.0 != std::ptr::null_mut() {
-					// Send identical NC message to the owner *with* the HT code in wParam.
-					// The owner's DefWindowProc will “perform the appropriate action”
-					// (enter system move/size loop).
-					SendMessageW(owner, msg, WPARAM(ht as usize), lparam);
-					return LRESULT(0);
+					// Start MOVE if we ever decide to treat some area as caption in the helper.
+					if ht == HTCAPTION {
+						ReleaseCapture();
+						// lParam can be 0 for SC_MOVE; Windows tracks the mouse.
+						SendMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_MOVE | (HTCAPTION as i32)) as usize), LPARAM(0));
+						return LRESULT(0);
+					}
+
+					// Otherwise start a SIZE on the correct edge/corner.
+					if let Some(wmsz) = ht_to_wmsz(ht) {
+						ReleaseCapture();
+						// Passing 0 for lParam is fine; Windows captures and tracks.
+						SendMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE as usize) | wmsz), LPARAM(0));
+						return LRESULT(0);
+					}
 				}
-				// Otherwise: not in our ring → let it pass through.
+				// Not our ring → let other windows handle it.
 				return LRESULT(HTTRANSPARENT as isize);
 			}
 
-			// Never activate on click
-			WM_MOUSEACTIVATE => {
-				return LRESULT(MA_NOACTIVATE as isize);
-			}
+			WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
 			_ => {}
 		}
 		DefWindowProcW(hwnd, msg, wparam, lparam)
 	}
 
-	unsafe fn helper_hit(helper: HWND, sx: u32, sy: u32) -> u32 {
+	fn ht_to_wmsz(ht: i32) -> Option<usize> {
+		match ht {
+			HTLEFT => Some(WMSZ_LEFT as usize),
+			HTRIGHT => Some(WMSZ_RIGHT as usize),
+			HTTOP => Some(WMSZ_TOP as usize),
+			HTBOTTOM => Some(WMSZ_BOTTOM as usize),
+			HTTOPLEFT => Some(WMSZ_TOPLEFT as usize),
+			HTTOPRIGHT => Some(WMSZ_TOPRIGHT as usize),
+			HTBOTTOMLEFT => Some(WMSZ_BOTTOMLEFT as usize),
+			HTBOTTOMRIGHT => Some(WMSZ_BOTTOMRIGHT as usize),
+			_ => None,
+		}
+	}
+
+	unsafe fn helper_hit(helper: HWND, sx: i32, sy: i32) -> i32 {
 		let mut r = RECT::default();
 		GetWindowRect(helper, &mut r);
 
