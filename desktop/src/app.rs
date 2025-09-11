@@ -458,14 +458,14 @@ mod ring {
 
 	pub unsafe fn install(hwnd: HWND) {
 		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-		style &= !(WS_CAPTION.0 | WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0);
+		style &= !(WS_CAPTION.0);
 		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
 		let _ = DwmIsCompositionEnabled();
 		let margins = MARGINS {
 			cxLeftWidth: 0,
 			cxRightWidth: 0,
-			cyTopHeight: 0,
+			cyTopHeight: 6,
 			cyBottomHeight: 0,
 		};
 		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
