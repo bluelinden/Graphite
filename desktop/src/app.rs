@@ -495,7 +495,7 @@ mod hybrid_chrome {
 		use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
 		let handle = window.window_handle()?.as_raw();
 		match handle {
-			RawWindowHandle::Win32(Win32WindowHandle { hwnd, .. }) => Ok(HWND(hwnd.get() as isize)),
+			RawWindowHandle::Win32(h) => Ok(HWND(h.hwnd.get() as *mut std::ffi::c_void)),
 			_ => Err(anyhow!("Not a Win32 window")),
 		}
 	}
