@@ -490,7 +490,7 @@ mod win {
 
 			// Forward unhandled messages to the original WNDPROC.
 			let orig = OLD_WNDPROC.unwrap_or_default();
-			CallWindowProcW(transmute(orig), hwnd, msg, wparam, lparam)
+			CallWindowProcW(std::mem::transmute(orig), hwnd, msg, wparam, lparam)
 		}
 	}
 }
