@@ -162,10 +162,6 @@ impl WinitApp {
 				if let Some(window) = &self.window {
 					window.set_maximized(maximized);
 					window.set_minimized(minimized);
-					#[cfg(target_os = "windows")]
-					unsafe {
-						ring::sync_ring_to_main()
-					};
 				}
 			}
 			DesktopFrontendMessage::DragWindow => {
@@ -299,25 +295,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		let window = event_loop.create_window(window).unwrap();
 
 		#[cfg(target_os = "windows")]
-		unsafe {
-			use wgpu::rwh::HasWindowHandle;
-			use wgpu::rwh::RawWindowHandle;
-			use windows::Win32::Foundation::*;
-			use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DwmSetWindowAttribute};
-			use windows::Win32::UI::Controls::MARGINS;
-			use windows::Win32::UI::WindowsAndMessaging::*;
-
-			let hwnd = match window.window_handle().unwrap().as_raw() {
-				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
-				_ => panic!("Not using Win32 window handle on Windows"),
-			};
-
-			ring::install(hwnd);
-			ring::create_ring(hwnd);
-			ring::sync_ring_to_main();
-		}
-
-		//TODO   // configure_window_decorations(&window);
+		let _chrome = hybrid_chrome::install(&window, 36).unwrap();
 
 		let window = Arc::new(window);
 		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
@@ -400,10 +378,6 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			WindowEvent::Resized(PhysicalSize { width, height }) => {
 				let _ = self.window_size_sender.send(WindowSize::new(width as usize, height as usize));
 				self.cef_context.notify_of_resize();
-				#[cfg(target_os = "windows")]
-				unsafe {
-					ring::sync_ring_to_main()
-				};
 			}
 			WindowEvent::RedrawRequested => {
 				let Some(ref mut graphics_state) = self.graphics_state else { return };
@@ -444,213 +418,149 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 }
 
 #[cfg(target_os = "windows")]
-mod ring {
-	use windows::Win32::{Foundation::*, Graphics::Dwm::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::Controls::*, UI::WindowsAndMessaging::*};
-	use windows::core::w;
+mod hybrid_chrome {
+	#![cfg(windows)]
 
-	// thickness of the *external* draggable ring (logical px)
-	const RING: i32 = 8;
+	use std::{
+		collections::HashMap,
+		mem::size_of,
+		sync::{Mutex, OnceLock},
+	};
 
-	static mut MAIN: HWND = HWND(std::ptr::null_mut());
-	static mut RINGHWND: HWND = HWND(std::ptr::null_mut());
+	use anyhow::{Result, anyhow};
+	use raw_window_handle::HasWindowHandle;
+	use winit::window::Window;
 
-	static mut OLD_WNDPROC: isize = 0;
+	use windows::Win32::{
+		Foundation::{HWND, LRESULT, RECT},
+		Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute, DwmSetWindowAttribute, MARGINS},
+		UI::WindowsAndMessaging::{CallWindowProcW, DefWindowProcW, GWLP_WNDPROC, GetWindowLongPtrW, GetWindowRect, HTCAPTION, HTCLIENT, SetWindowLongPtrW, WM_NCHITTEST},
+	};
 
-	pub unsafe fn install(hwnd: HWND) {
-		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-		style &= !(WS_CAPTION.0);
-		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-
-		let _ = DwmIsCompositionEnabled();
-		let margins = MARGINS {
-			cxLeftWidth: 0,
-			cxRightWidth: 0,
-			cyTopHeight: 16,
-			cyBottomHeight: 0,
-		};
-		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-		SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+	/// Keep this alive while the window lives; drop restores the original WndProc.
+	pub struct HybridChromeHandle {
+		hwnd: HWND,
 	}
 
-	pub unsafe fn create_ring(owner: HWND) {
-		MAIN = owner;
+	impl Drop for HybridChromeHandle {
+		fn drop(&mut self) {
+			let _ = unsafe { uninstall_impl(self.hwnd) };
+		}
+	}
 
-		let hinst = HINSTANCE(GetModuleHandleW(None).unwrap().0);
-
-		// Register a tiny window class for the ring
-		let class = w!("RingBorderWnd");
-		let wc = WNDCLASSW {
-			lpfnWndProc: Some(wndproc),
-			hInstance: hinst,
-			lpszClassName: class,
-			hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
-			..Default::default()
-		};
-		RegisterClassW(&wc);
-
-		// Create owned, layered, no-activate popup that we can make invisible but hit-testable.
-		let ex = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
-		let style = WS_POPUP;
-
-		RINGHWND = CreateWindowExW(
-			ex, class, None, style, 0, 0, 0, 0, owner, // owner, not parent
-			None, hinst, None,
+	pub fn install(window: &Window, caption_height_px: i32) -> Result<HybridChromeHandle> {
+		install_with_options(
+			window,
+			Options {
+				caption_height_px,
+				enable_dark_caption: true,
+				backdrop: Some(1),
+			},
 		)
-		.unwrap();
-
-		// Show without activating.
-		ShowWindow(RINGHWND, SW_SHOWNA);
 	}
 
-	pub unsafe fn sync_ring_to_main() {
-		if MAIN.0.is_null() || RINGHWND.0.is_null() {
-			return;
-		}
-
-		// Get the main window’s outer rect in screen coords
-		let mut rc: RECT = Default::default();
-		windows::Win32::UI::WindowsAndMessaging::GetWindowRect(MAIN, &mut rc);
-
-		// Expand by RING (DPI aware)
-		let scale = dpi_scale(MAIN);
-		let g = (RING as f32 * scale) as i32;
-
-		let x = rc.left - g;
-		let y = rc.top - g;
-		let w = (rc.right - rc.left) + 2 * g;
-		let h = (rc.bottom - rc.top) + 2 * g;
-
-		SetWindowPos(RINGHWND, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+	pub struct Options {
+		pub caption_height_px: i32,
+		pub enable_dark_caption: bool,
+		pub backdrop: Option<i32>,
 	}
 
-	extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+	pub fn install_with_options(window: &Window, opts: Options) -> Result<HybridChromeHandle> {
+		let hwnd = hwnd_from_winit(window)?;
+
 		unsafe {
-			match msg {
-				WM_LBUTTONDOWN => {
-					// Convert cursor to ring client coords
-					let mut pt = POINT {
-						x: GET_X_LPARAM(l.0),
-						y: GET_Y_LPARAM(l.0),
-					};
-					ClientToScreen(hwnd, &mut pt);
+			let margins = MARGINS {
+				cxLeftWidth: 0,
+				cxRightWidth: 0,
+				cyBottomHeight: 0,
+				cyTopHeight: opts.caption_height_px.max(0),
+			};
+			let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-					// Figure out which edge/corner ring zone the mouse is in, then
-					// ask the MAIN window to start native sizing via WM_SYSCOMMAND/SC_SIZE.
-					let edge = edge_from_point(hwnd, pt);
-					if let Some(cmd) = edge_to_sc_size(edge) {
-						// Start the system sizing loop on the main window
-						PostMessageW(MAIN, WM_SYSCOMMAND, WPARAM(cmd as usize), LPARAM(0));
-					}
-					return LRESULT(0);
-				}
-				WM_NCHITTEST => {
-					// Make the cursor show the right resize arrows when hovering the ring.
-					let screen_x = GET_X_LPARAM(l.0);
-					let screen_y = GET_Y_LPARAM(l.0);
-					let edge = edge_from_point(hwnd, POINT { x: screen_x, y: screen_y });
-					let code = match edge {
-						1 => HTLEFT,
-						2 => HTRIGHT,
-						3 => HTTOP,
-						4 => HTBOTTOM,
-						5 => HTTOPLEFT,
-						6 => HTTOPRIGHT,
-						7 => HTBOTTOMLEFT,
-						8 => HTBOTTOMRIGHT,
-						_ => HTCLIENT,
-					};
-					return LRESULT(code as isize);
-				}
-				_ => {}
+			if opts.enable_dark_caption {
+				let on: i32 = 1;
+				let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on as *const _ as _, size_of::<i32>() as u32);
 			}
-			DefWindowProcW(hwnd, msg, w, l)
+			if let Some(kind) = opts.backdrop {
+				let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &kind as *const _ as _, size_of::<i32>() as u32);
+			}
+
+			install_impl(hwnd, opts.caption_height_px)?;
+		}
+
+		Ok(HybridChromeHandle { hwnd })
+	}
+
+	fn hwnd_from_winit(window: &Window) -> Result<HWND> {
+		use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
+		let handle = window.window_handle()?.as_raw();
+		match handle {
+			RawWindowHandle::Win32(Win32WindowHandle { hwnd, .. }) => Ok(HWND(hwnd.get() as isize)),
+			_ => Err(anyhow!("Not a Win32 window")),
 		}
 	}
 
-	// Map our edge id to SC_SIZE codes (WMSZ_*) for WM_SYSCOMMAND.
-	fn edge_to_sc_size(edge: i32) -> Option<u32> {
-		Some(match edge {
-			1 => SC_SIZE | WMSZ_LEFT as u32,
-			2 => SC_SIZE | WMSZ_RIGHT as u32,
-			3 => SC_SIZE | WMSZ_TOP as u32,
-			4 => SC_SIZE | WMSZ_BOTTOM as u32,
-			5 => SC_SIZE | WMSZ_TOPLEFT as u32,
-			6 => SC_SIZE | WMSZ_TOPRIGHT as u32,
-			7 => SC_SIZE | WMSZ_BOTTOMLEFT as u32,
-			8 => SC_SIZE | WMSZ_BOTTOMRIGHT as u32,
-			_ => return None,
-		})
+	struct State {
+		prev_wndproc: isize,
+		caption_height_px: i32,
 	}
 
-	unsafe fn edge_from_point(hwnd: HWND, screen_pt: POINT) -> i32 {
-		// Get ring rect
-		let mut r: RECT = Default::default();
-		windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut r);
-
-		let scale = dpi_scale(MAIN);
-		let g = (RING as f32 * scale) as i32;
-
-		// inner rect equals owner's rect (ring minus g on all sides)
-		let inner = RECT {
-			left: r.left + g,
-			top: r.top + g,
-			right: r.right - g,
-			bottom: r.bottom - g,
-		};
-
-		// Which band are we in?
-		let left = screen_pt.x < inner.left;
-		let right = screen_pt.x >= inner.right;
-		let top = screen_pt.y < inner.top;
-		let bottom = screen_pt.y >= inner.bottom;
-
-		// corners first
-		if top && left {
-			return 5;
-		}
-		if top && right {
-			return 6;
-		}
-		if bottom && left {
-			return 7;
-		}
-		if bottom && right {
-			return 8;
-		}
-
-		if left {
-			return 1;
-		}
-		if right {
-			return 2;
-		}
-		if top {
-			return 3;
-		}
-		if bottom {
-			return 4;
-		}
-		0
+	static STATE: OnceLock<Mutex<HashMap<isize, State>>> = OnceLock::new();
+	fn state_map() -> &'static Mutex<HashMap<isize, State>> {
+		STATE.get_or_init(|| Mutex::new(HashMap::new()))
 	}
 
-	fn dpi_scale(hwnd: HWND) -> f32 {
-		unsafe {
-			let hdc = GetDC(hwnd);
-			if !hdc.0.is_null() {
-				let dpi = GetDeviceCaps(hdc, LOGPIXELSX) as f32;
-				ReleaseDC(hwnd, hdc);
-				return dpi / 96.0;
+	unsafe fn install_impl(hwnd: HWND, caption_height_px: i32) -> Result<()> {
+		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+		if prev == 0 {
+			return Err(anyhow!("SetWindowLongPtrW failed"));
+		}
+		state_map().lock().unwrap().insert(
+			hwnd.0,
+			State {
+				prev_wndproc: prev,
+				caption_height_px,
+			},
+		);
+		Ok(())
+	}
+
+	unsafe fn uninstall_impl(hwnd: HWND) -> Result<()> {
+		if let Some(state) = state_map().lock().unwrap().remove(&hwnd.0) {
+			let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc);
+		}
+		Ok(())
+	}
+
+	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> LRESULT {
+		if msg == WM_NCHITTEST {
+			if let Some(st) = state_map().lock().unwrap().get(&hwnd.0) {
+				let sx = (lparam & 0xFFFF) as i16 as i32;
+				let sy = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+
+				let mut wr = RECT::default();
+				GetWindowRect(hwnd, &mut wr);
+				let px = sx - wr.left;
+				let py = sy - wr.top;
+
+				let mut buttons = RECT::default();
+				let _ = DwmGetWindowAttribute(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &mut buttons as *mut _ as *mut _, size_of::<RECT>() as u32);
+
+				let in_top_band = py >= 0 && py < st.caption_height_px;
+				let over_buttons = px >= buttons.left && px < buttons.right && py >= buttons.top && py < buttons.bottom;
+
+				if in_top_band && !over_buttons {
+					return LRESULT(HTCAPTION as isize);
+				} else {
+					return LRESULT(HTCLIENT as isize);
+				}
 			}
 		}
-		1.0
-	}
 
-	// helpers for LPARAM unpack
-	const fn GET_X_LPARAM(lp: isize) -> i32 {
-		(lp & 0xFFFF) as i16 as i32
-	}
-	const fn GET_Y_LPARAM(lp: isize) -> i32 {
-		((lp >> 16) & 0xFFFF) as i16 as i32
+		let prev = state_map().lock().unwrap().get(&hwnd.0).map(|s| s.prev_wndproc).unwrap_or(0);
+		if prev != 0 {
+			return CallWindowProcW(std::mem::transmute(prev), hwnd, msg, wparam, lparam);
+		}
+		DefWindowProcW(hwnd, msg, wparam, lparam)
 	}
 }
