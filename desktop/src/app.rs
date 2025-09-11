@@ -162,7 +162,8 @@ impl WinitApp {
 				if let Some(window) = &self.window {
 					window.set_maximized(maximized);
 					window.set_minimized(minimized);
-					configure_window_decorations(window);
+					#[cfg(target_os = "windows")]
+					ring::sync_ring_to_main();
 				}
 			}
 			DesktopFrontendMessage::DragWindow => {
@@ -295,7 +296,19 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 		let window = event_loop.create_window(window).unwrap();
 
-		configure_window_decorations(&window);
+		#[cfg(target_os = "windows")]
+		unsafe {
+			// Create draggable ring outside window bounds
+			let handle = window.window_handle().unwrap();
+			let hwnd = match handle.as_raw() {
+				raw_window_handle::RawWindowHandle::Win32(h) => windows::Win32::Foundation::HWND(h.hwnd.get() as isize),
+				_ => return,
+			};
+			ring::create_ring(hwnd);
+			ring::sync_ring_to_main();
+		}
+
+		//TODO   // configure_window_decorations(&window);
 
 		let window = Arc::new(window);
 		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
@@ -378,6 +391,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			WindowEvent::Resized(PhysicalSize { width, height }) => {
 				let _ = self.window_size_sender.send(WindowSize::new(width as usize, height as usize));
 				self.cef_context.notify_of_resize();
+				ring::sync_ring_to_main();
 			}
 			WindowEvent::RedrawRequested => {
 				let Some(ref mut graphics_state) = self.graphics_state else { return };
@@ -417,152 +431,198 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 	}
 }
 
-fn configure_window_decorations(window: &Window) {
-	#[cfg(target_os = "windows")]
-	{
-		use wgpu::rwh::HasWindowHandle;
-		use wgpu::rwh::RawWindowHandle;
-		use windows::Win32::Foundation::*;
-		use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DwmSetWindowAttribute};
-		use windows::Win32::UI::Controls::MARGINS;
-		use windows::Win32::UI::WindowsAndMessaging::*;
-
-		let hwnd = match window.window_handle().unwrap().as_raw() {
-			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
-			_ => panic!("Not using Win32 window handle on Windows"),
-		};
-
-		unsafe {
-			win_custom_frame::install(hwnd);
-		}
-
-		println!("Configured window decorations for Windows");
-	}
-}
-
 #[cfg(target_os = "windows")]
-mod win_custom_frame {
-	use std::{mem::transmute, ptr::null_mut};
-	use windows::Win32::UI::Controls::MARGINS;
+mod ring {
 	use windows::Win32::{
-		Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-		Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmIsCompositionEnabled},
-		Graphics::Gdi::*,
+		Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+		Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC},
 		UI::WindowsAndMessaging::*,
 	};
+	use windows::w;
 
-	static mut OLD_WNDPROC: isize = 0;
-	const GRIP: i32 = 8;
+	// thickness of the *external* draggable ring (logical px)
+	const RING: i32 = 8;
 
-	pub unsafe fn install(hwnd: HWND) {
-		let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-		style &= !WS_CAPTION.0;
-		style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
-		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+	static mut MAIN: HWND = HWND(0);
+	static mut RINGHWND: HWND = HWND(0);
 
-		let _ = DwmIsCompositionEnabled();
-		let margins = MARGINS {
-			cxLeftWidth: 0,
-			cxRightWidth: 0,
-			cyTopHeight: 0,
-			cyBottomHeight: 0,
+	pub unsafe fn create_ring(owner: HWND) {
+		MAIN = owner;
+
+		let hinst = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+
+		// Register a tiny window class for the ring
+		let class = w!("RingBorderWnd");
+		let wc = WNDCLASSW {
+			lpfnWndProc: Some(wndproc),
+			hInstance: hinst,
+			lpszClassName: class,
+			hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+			..Default::default()
 		};
-		let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+		RegisterClassW(&wc);
 
-		OLD_WNDPROC = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+		// Create owned, layered, no-activate popup that we can make invisible but hit-testable.
+		let ex = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+		let style = WS_POPUP;
 
-		SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+		RINGHWND = CreateWindowExW(
+			ex,
+			class,
+			None,
+			style,
+			0,
+			0,
+			0,
+			0,
+			Some(owner), // owner, not parent
+			None,
+			hinst,
+			None,
+		)
+		.unwrap();
+
+		// Show without activating.
+		ShowWindow(RINGHWND, SW_SHOWNA);
+	}
+
+	pub unsafe fn sync_ring_to_main() {
+		if MAIN.0 == 0 || RINGHWND.0 == 0 {
+			return;
+		}
+
+		// Get the main window’s outer rect in screen coords
+		let mut rc: RECT = Default::default();
+		GetWindowRect(MAIN, &mut rc);
+
+		// Expand by RING (DPI aware)
+		let scale = dpi_scale(MAIN);
+		let g = (RING as f32 * scale) as i32;
+
+		let x = rc.left - g;
+		let y = rc.top - g;
+		let w = (rc.right - rc.left) + 2 * g;
+		let h = (rc.bottom - rc.top) + 2 * g;
+
+		SetWindowPos(RINGHWND, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
 	}
 
 	extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
 		unsafe {
 			match msg {
-				WM_NCCALCSIZE => {
-					if w.0 != 0 {
-						return LRESULT(0);
-					}
-				}
-
-				WM_NCHITTEST => {
+				WM_LBUTTONDOWN => {
 					let mut pt = POINT {
-						x: (l.0 as i16) as i32,
-						y: ((l.0 >> 16) as i16) as i32,
+						x: GET_X_LPARAM(l.0),
+						y: GET_Y_LPARAM(l.0),
 					};
-					ScreenToClient(hwnd, &mut pt);
+					ClientToScreen(hwnd, &mut pt);
 
-					let mut rc: RECT = RECT::default();
-					GetClientRect(hwnd, &mut rc);
-
-					let scale = get_scale(hwnd);
-					let grip = ((GRIP as f32) * scale) as i32;
-
-					let left = pt.x < rc.left + grip;
-					let right = pt.x >= rc.right - grip;
-					let top = pt.y < rc.top + grip;
-					let bottom = pt.y >= rc.bottom - grip;
-
-					if top && left {
-						return LRESULT(HTTOPLEFT as isize);
+					let edge = edge_from_point(hwnd, pt);
+					if let Some(cmd) = edge_to_sc_size(edge) {
+						PostMessageW(MAIN, WM_SYSCOMMAND, WPARAM(cmd as usize), LPARAM(0));
 					}
-					if top && right {
-						return LRESULT(HTTOPRIGHT as isize);
-					}
-					if bottom && left {
-						return LRESULT(HTBOTTOMLEFT as isize);
-					}
-					if bottom && right {
-						return LRESULT(HTBOTTOMRIGHT as isize);
-					}
-
-					if left {
-						return LRESULT(HTLEFT as isize);
-					}
-					if right {
-						return LRESULT(HTRIGHT as isize);
-					}
-					if top {
-						return LRESULT(HTTOP as isize);
-					}
-					if bottom {
-						return LRESULT(HTBOTTOM as isize);
-					}
-
-					return LRESULT(HTCLIENT as isize);
-				}
-
-				WM_DWMCOMPOSITIONCHANGED | WM_THEMECHANGED => {
-					let margins = MARGINS {
-						cxLeftWidth: 0,
-						cxRightWidth: 0,
-						cyTopHeight: 0,
-						cyBottomHeight: 0,
-					};
-					let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
 					return LRESULT(0);
 				}
-
-				WM_DESTROY => {
-					if OLD_WNDPROC != 0 {
-						let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, OLD_WNDPROC);
-						OLD_WNDPROC = 0;
-					}
+				WM_NCHITTEST => {
+					let screen_x = GET_X_LPARAM(l.0);
+					let screen_y = GET_Y_LPARAM(l.0);
+					let edge = edge_from_point(hwnd, POINT { x: screen_x, y: screen_y });
+					let code = match edge {
+						1 => HTLEFT,
+						2 => HTRIGHT,
+						3 => HTTOP,
+						4 => HTBOTTOM,
+						5 => HTTOPLEFT,
+						6 => HTTOPRIGHT,
+						7 => HTBOTTOMLEFT,
+						8 => HTBOTTOMRIGHT,
+						_ => HTCLIENT,
+					};
+					return LRESULT(code as isize);
 				}
 				_ => {}
 			}
-
-			CallWindowProcW(transmute(OLD_WNDPROC), hwnd, msg, w, l)
+			DefWindowProcW(hwnd, msg, w, l)
 		}
 	}
 
-	fn get_scale(hwnd: HWND) -> f32 {
+	fn edge_to_sc_size(edge: i32) -> Option<u32> {
+		Some(match edge {
+			1 => SC_SIZE | WMSZ_LEFT as u32,
+			2 => SC_SIZE | WMSZ_RIGHT as u32,
+			3 => SC_SIZE | WMSZ_TOP as u32,
+			4 => SC_SIZE | WMSZ_BOTTOM as u32,
+			5 => SC_SIZE | WMSZ_TOPLEFT as u32,
+			6 => SC_SIZE | WMSZ_TOPRIGHT as u32,
+			7 => SC_SIZE | WMSZ_BOTTOMLEFT as u32,
+			8 => SC_SIZE | WMSZ_BOTTOMRIGHT as u32,
+			_ => return None,
+		})
+	}
+
+	unsafe fn edge_from_point(hwnd: HWND, screen_pt: POINT) -> i32 {
+		let mut r: RECT = Default::default();
+		GetWindowRect(hwnd, &mut r);
+
+		let scale = dpi_scale(MAIN);
+		let g = (RING as f32 * scale) as i32;
+
+		let inner = RECT {
+			left: r.left + g,
+			top: r.top + g,
+			right: r.right - g,
+			bottom: r.bottom - g,
+		};
+
+		let left = screen_pt.x < inner.left;
+		let right = screen_pt.x >= inner.right;
+		let top = screen_pt.y < inner.top;
+		let bottom = screen_pt.y >= inner.bottom;
+
+		if top && left {
+			return 5;
+		}
+		if top && right {
+			return 6;
+		}
+		if bottom && left {
+			return 7;
+		}
+		if bottom && right {
+			return 8;
+		}
+
+		if left {
+			return 1;
+		}
+		if right {
+			return 2;
+		}
+		if top {
+			return 3;
+		}
+		if bottom {
+			return 4;
+		}
+		0
+	}
+
+	fn dpi_scale(hwnd: HWND) -> f32 {
 		unsafe {
 			let hdc = GetDC(hwnd);
-			if hdc.0 != std::ptr::null_mut() {
+			if hdc.0 != 0 {
 				let dpi = GetDeviceCaps(hdc, LOGPIXELSX) as f32;
 				ReleaseDC(hwnd, hdc);
 				return dpi / 96.0;
 			}
 		}
 		1.0
+	}
+
+	const fn GET_X_LPARAM(lp: isize) -> i32 {
+		(lp & 0xFFFF) as i16 as i32
+	}
+	const fn GET_Y_LPARAM(lp: isize) -> i32 {
+		((lp >> 16) & 0xFFFF) as i16 as i32
 	}
 }
