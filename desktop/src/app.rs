@@ -425,39 +425,45 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 mod hybrid_chrome {
 	use std::{
 		collections::HashMap,
-		mem::size_of,
+		mem::{size_of, transmute},
+		ptr::null_mut,
 		sync::{Mutex, OnceLock},
 	};
+
 	use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-	use windows::Win32::Foundation::LPARAM;
-	use windows::Win32::Foundation::WPARAM;
 	use winit::window::Window;
 
-	use windows::Win32::UI::Controls::MARGINS;
 	use windows::Win32::{
-		Foundation::{HWND, LRESULT, RECT},
-		Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute, DwmSetWindowAttribute},
-		UI::WindowsAndMessaging::{CallWindowProcW, DefWindowProcW, GWLP_WNDPROC, GetWindowRect, HTCAPTION, HTCLIENT, SetWindowLongPtrW, WM_NCHITTEST},
+		Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
+		Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmGetWindowAttribute, DwmSetWindowAttribute},
+		Graphics::Gdi::{GetDeviceCaps, HDC, LOGPIXELSX},
+		System::SystemInformation::{GetSystemMetrics, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME},
+		UI::HiDpi::GetDpiForWindow,
+		UI::WindowsAndMessaging::{
+			CallWindowProcW, DefWindowProcW, GWLP_WNDPROC, GetMonitorInfoW, GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
+			HTTOPLEFT, HTTOPRIGHT, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SPI_GETWORKAREA, SetWindowLongPtrW, SystemParametersInfoW, WM_NCCALCSIZE, WM_NCHITTEST,
+		},
 	};
 
-	/// Keep this alive while the window lives; drop restores the original WndProc.
+	/// Keep this alive while installed; Drop restores the original WndProc.
 	pub struct HybridChromeHandle {
 		hwnd: HWND,
 	}
-
 	impl Drop for HybridChromeHandle {
 		fn drop(&mut self) {
 			let _ = unsafe { uninstall_impl(self.hwnd) };
 		}
 	}
 
+	/// Install borderless (NCCALCSIZE) + hit-testing. `caption_height_px` is the
+	/// draggable band you’ll draw into at the top of your **client** area.
 	pub fn install(window: &Window, caption_height_px: i32) -> HybridChromeHandle {
 		install_with_options(
 			window,
 			Options {
 				caption_height_px,
 				enable_dark_caption: true,
-				backdrop: Some(0),
+				backdrop: Some(1), // 1=Mica (Win11), 2=Acrylic, 3=Tabbed; None to skip
 			},
 		)
 	}
@@ -472,14 +478,7 @@ mod hybrid_chrome {
 		let hwnd = hwnd_from_winit(window);
 
 		unsafe {
-			let margins = MARGINS {
-				cxLeftWidth: 0,
-				cxRightWidth: 0,
-				cyBottomHeight: 0,
-				cyTopHeight: opts.caption_height_px.max(0),
-			};
-			let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
+			// Optional: dark caption + system backdrop (no-op on unsupported builds)
 			if opts.enable_dark_caption {
 				let on: i32 = 1;
 				let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on as *const _ as _, size_of::<i32>() as u32);
@@ -495,9 +494,9 @@ mod hybrid_chrome {
 	}
 
 	fn hwnd_from_winit(window: &Window) -> HWND {
-		let handle = window.window_handle().expect("Failed to get window handle").as_raw();
+		let handle = window.window_handle().expect("no window handle").as_raw();
 		match handle {
-			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as isize),
 			_ => panic!("Not a Win32 window"),
 		}
 	}
@@ -513,12 +512,12 @@ mod hybrid_chrome {
 	}
 
 	unsafe fn install_impl(hwnd: HWND, caption_height_px: i32) {
-		let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize) };
+		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
 		if prev == 0 {
 			panic!("SetWindowLongPtrW failed");
 		}
 		state_map().lock().unwrap().insert(
-			hwnd.0 as isize,
+			hwnd.0,
 			State {
 				prev_wndproc: prev,
 				caption_height_px,
@@ -527,39 +526,127 @@ mod hybrid_chrome {
 	}
 
 	unsafe fn uninstall_impl(hwnd: HWND) {
-		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
+		if let Some(state) = state_map().lock().unwrap().remove(&hwnd.0) {
 			let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc);
 		}
 	}
 
+	#[repr(C)]
+	struct NCCALCSIZE_PARAMS {
+		rgrc: [RECT; 3],
+		lppos: *mut windows::Win32::UI::WindowsAndMessaging::WINDOWPOS,
+	}
+
 	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-		if msg == WM_NCHITTEST {
-			if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
-				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
-				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+		match msg {
+			// 1) Remove the system-drawn non-client area (title bar, borders) and make the
+			// client area fill the whole window. Also handle maximized padding.
+			WM_NCCALCSIZE => {
+				if wparam.0 != 0 {
+					let params = lparam.0 as *mut NCCALCSIZE_PARAMS;
+					let mut rect = (*params).rgrc[0];
 
-				let mut wr = RECT::default();
-				GetWindowRect(hwnd, &mut wr);
-				let px = sx - wr.left;
-				let py = sy - wr.top;
+					// If maximized, inset to the monitor work area so content isn't under edges.
+					let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+					if monitor.0 != 0 {
+						let mut mi = MONITORINFO {
+							cbSize: size_of::<MONITORINFO>() as u32,
+							..Default::default()
+						};
+						if GetMonitorInfoW(monitor, &mut mi).as_bool() {
+							// Detect maximized by comparing window to monitor work area
+							let mut wnd = RECT::default();
+							GetWindowRect(hwnd, &mut wnd);
+							let is_max = (wnd.left <= mi.rcWork.left) && (wnd.top <= mi.rcWork.top) && (wnd.right >= mi.rcWork.right) && (wnd.bottom >= mi.rcWork.bottom);
+							if is_max {
+								rect = mi.rcWork; // use work area as client rect
+							}
+						}
+					}
 
-				let mut buttons = RECT::default();
-				let _ = DwmGetWindowAttribute(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &mut buttons as *mut _ as *mut _, size_of::<RECT>() as u32);
+					(*params).rgrc[0] = rect;
+					// Return 0 => we've provided the full client rect; Win32 won't draw any NC area.
+					return LRESULT(0);
+				}
+				// If wParam==FALSE, fall through to default calc.
+			}
 
-				let in_top_band = py >= 0 && py < st.caption_height_px;
-				let over_buttons = px >= buttons.left && px < buttons.right && py >= buttons.top && py < buttons.bottom;
+			// 2) Provide resizing borders and a draggable caption area.
+			WM_NCHITTEST => {
+				if let Some(st) = state_map().lock().unwrap().get(&hwnd.0) {
+					// Mouse position in screen coordinates
+					let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
 
-				if in_top_band && !over_buttons {
-					return LRESULT(HTCAPTION as isize);
-				} else {
+					// Window rect (screen)
+					let mut wr = RECT::default();
+					GetWindowRect(hwnd, &mut wr);
+
+					// Convert to window-local
+					let px = sx - wr.left;
+					let py = sy - wr.top;
+					let ww = wr.right - wr.left;
+					let wh = wr.bottom - wr.top;
+
+					// System border thickness (accounts for DPI & padded border)
+					let frame_x = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+					let frame_y = GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+
+					let on_left = px < frame_x;
+					let on_right = px >= ww - frame_x;
+					let on_top = py < frame_y;
+					let on_bottom = py >= wh - frame_y;
+
+					// Corners first
+					if on_top && on_left {
+						return LRESULT(HTTOPLEFT as isize);
+					}
+					if on_top && on_right {
+						return LRESULT(HTTOPRIGHT as isize);
+					}
+					if on_bottom && on_left {
+						return LRESULT(HTBOTTOMLEFT as isize);
+					}
+					if on_bottom && on_right {
+						return LRESULT(HTBOTTOMRIGHT as isize);
+					}
+
+					// Edges
+					if on_top {
+						return LRESULT(HTTOP as isize);
+					}
+					if on_left {
+						return LRESULT(HTLEFT as isize);
+					}
+					if on_right {
+						return LRESULT(HTRIGHT as isize);
+					}
+					if on_bottom {
+						return LRESULT(HTBOTTOM as isize);
+					}
+
+					// Avoid system caption buttons region (they still exist logically for insets)
+					let mut buttons = RECT::default();
+					let _ = DwmGetWindowAttribute(hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &mut buttons as *mut _ as *mut _, size_of::<RECT>() as u32);
+					let over_buttons = px >= buttons.left && px < buttons.right && py >= buttons.top && py < buttons.bottom;
+
+					// Drag anywhere in the top band (except over the button rect)
+					let in_caption_band = py >= 0 && py < st.caption_height_px;
+					if in_caption_band && !over_buttons {
+						return LRESULT(HTCAPTION as isize);
+					}
+
 					return LRESULT(HTCLIENT as isize);
 				}
 			}
+
+			_ => {}
 		}
 
-		let prev = state_map().lock().unwrap().get(&(hwnd.0 as isize)).map(|s| s.prev_wndproc).unwrap_or(0);
+		// Call original WndProc
+		let prev = state_map().lock().unwrap().get(&hwnd.0).map(|s| s.prev_wndproc).unwrap_or(0);
 		if prev != 0 {
-			return CallWindowProcW(std::mem::transmute(prev), hwnd, msg, wparam, lparam);
+			return CallWindowProcW(transmute(prev), hwnd, msg, wparam, lparam);
 		}
 		DefWindowProcW(hwnd, msg, wparam, lparam)
 	}
