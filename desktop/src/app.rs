@@ -423,7 +423,7 @@ fn configure_window_decorations(window: &Window) {
 		use wgpu::rwh::HasWindowHandle;
 		use wgpu::rwh::RawWindowHandle;
 		use windows::Win32::Foundation::*;
-		use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute};
+		use windows::Win32::Graphics::Dwm::{DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DwmSetWindowAttribute};
 		use windows::Win32::UI::Controls::MARGINS;
 		use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -431,8 +431,6 @@ fn configure_window_decorations(window: &Window) {
 			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
 			_ => panic!("Not using Win32 window handle on Windows"),
 		};
-
-		const DWMWA_COLOR_NONE: u32 = 0xFF00FFFE;
 
 		unsafe {
 			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
@@ -446,7 +444,7 @@ fn configure_window_decorations(window: &Window) {
 				tracing::error!("Failed to set window pos: {:?}", e);
 			}
 
-			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(34), &DWMWA_COLOR_NONE as *const u32 as _, std::mem::size_of::<u32>() as u32) {
+			if let Err(e) = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &DWMWA_COLOR_NONE as *const u32 as _, std::mem::size_of::<COLORREF>() as u32) {
 				tracing::error!("Failed to set DWMWA_BORDER_COLOR: {:?}", e);
 			}
 		}
