@@ -748,67 +748,87 @@ mod hybrid_chrome {
 	unsafe extern "system" fn helper_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		match msg {
 			WM_NCCREATE => {
-				// Stash owner HWND in GWLP_USERDATA
 				let cs = &*(lparam.0 as *const CREATESTRUCTW);
 				SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
 				return LRESULT(1);
 			}
+
 			WM_ERASEBKGND => {
-				// Don’t draw anything = visually invisible
+				// Invisible ring; nothing to paint
 				return LRESULT(1);
 			}
+
+			// Let the system know which HT* we are under the cursor
 			WM_NCHITTEST => {
+				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+				let ht = helper_hit(hwnd, sx, sy);
+				return LRESULT(ht as isize);
+			}
+
+			// Forward non-client mouse to the OWNER so its DefWindowProc starts move/resize.
+			WM_NCLBUTTONDOWN | WM_NCMOUSEMOVE | WM_NCLBUTTONUP => {
 				let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const HelperData;
 				let owner = if !data.is_null() { (*data).owner } else { HWND::default() };
 
+				// Where are we? (screen coords)
 				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
 				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+				let ht = helper_hit(hwnd, sx, sy);
 
-				let mut r = RECT::default();
-				GetWindowRect(hwnd, &mut r);
-
-				// Which edge of the helper band are we on?
-				let on_left = sx < r.left + RESIZE_BAND_THICKNESS;
-				let on_right = sx >= r.right - RESIZE_BAND_THICKNESS;
-				let on_top = sy < r.top + RESIZE_BAND_THICKNESS;
-				let on_bottom = sy >= r.bottom - RESIZE_BAND_THICKNESS;
-
-				// Corners first
-				if on_top && on_left {
-					return LRESULT(HTTOPLEFT as isize);
+				if ht != HTTRANSPARENT && ht != HTCLIENT && owner.0 != std::ptr::null_mut() {
+					// Send identical NC message to the owner *with* the HT code in wParam.
+					// The owner's DefWindowProc will “perform the appropriate action”
+					// (enter system move/size loop).
+					SendMessageW(owner, msg, WPARAM(ht as usize), lparam);
+					return LRESULT(0);
 				}
-				if on_top && on_right {
-					return LRESULT(HTTOPRIGHT as isize);
-				}
-				if on_bottom && on_left {
-					return LRESULT(HTBOTTOMLEFT as isize);
-				}
-				if on_bottom && on_right {
-					return LRESULT(HTBOTTOMRIGHT as isize);
-				}
-
-				if on_top {
-					return LRESULT(HTTOP as isize);
-				}
-				if on_left {
-					return LRESULT(HTLEFT as isize);
-				}
-				if on_right {
-					return LRESULT(HTRIGHT as isize);
-				}
-				if on_bottom {
-					return LRESULT(HTBOTTOM as isize);
-				}
-
-				// Otherwise, let clicks fall through (treat as nowhere)
+				// Otherwise: not in our ring → let it pass through.
 				return LRESULT(HTTRANSPARENT as isize);
 			}
+
+			// Never activate on click
 			WM_MOUSEACTIVATE => {
-				// Never activate on click
 				return LRESULT(MA_NOACTIVATE as isize);
 			}
 			_ => {}
 		}
 		DefWindowProcW(hwnd, msg, wparam, lparam)
+	}
+
+	unsafe fn helper_hit(helper: HWND, sx: i32, sy: i32) -> i32 {
+		let mut r = RECT::default();
+		GetWindowRect(helper, &mut r);
+
+		let on_left = sx < r.left + RESIZE_BAND_THICKNESS;
+		let on_right = sx >= r.right - RESIZE_BAND_THICKNESS;
+		let on_top = sy < r.top + RESIZE_BAND_THICKNESS;
+		let on_bottom = sy >= r.bottom - RESIZE_BAND_THICKNESS;
+
+		if on_top && on_left {
+			return HTTOPLEFT;
+		}
+		if on_top && on_right {
+			return HTTOPRIGHT;
+		}
+		if on_bottom && on_left {
+			return HTBOTTOMLEFT;
+		}
+		if on_bottom && on_right {
+			return HTBOTTOMRIGHT;
+		}
+		if on_top {
+			return HTTOP;
+		}
+		if on_left {
+			return HTLEFT;
+		}
+		if on_right {
+			return HTRIGHT;
+		}
+		if on_bottom {
+			return HTBOTTOM;
+		}
+		HTTRANSPARENT
 	}
 }
