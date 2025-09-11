@@ -423,7 +423,7 @@ fn configure_window_decorations(window: &Window) {
 		use wgpu::rwh::HasWindowHandle;
 		use wgpu::rwh::RawWindowHandle;
 		use windows::Win32::Foundation::*;
-		use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+		use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, MARGINS};
 		use windows::Win32::UI::Controls::MARGINS;
 		use windows::Win32::UI::WindowsAndMessaging::*;
 
