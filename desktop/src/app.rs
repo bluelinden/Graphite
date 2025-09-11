@@ -308,7 +308,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			use windows::Win32::UI::WindowsAndMessaging::*;
 
 			let hwnd = match window.window_handle().unwrap().as_raw() {
-				RawWindowHandle::Win32(h) => h,
+				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
 				_ => panic!("Not using Win32 window handle on Windows"),
 			};
 
@@ -444,7 +444,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 #[cfg(target_os = "windows")]
 mod ring {
-	use windows::Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+	use windows::Win32::{Foundation::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*};
 	use windows::core::w;
 
 	// thickness of the *external* draggable ring (logical px)
