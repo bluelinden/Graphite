@@ -308,7 +308,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 			use windows::Win32::UI::WindowsAndMessaging::*;
 
 			let hwnd = match window.window_handle().unwrap().as_raw() {
-				RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+				RawWindowHandle::Win32(h) => h,
 				_ => panic!("Not using Win32 window handle on Windows"),
 			};
 
@@ -448,12 +448,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 #[cfg(target_os = "windows")]
 mod ring {
-	use windows::Win32::{
-		Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-		Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC},
-		System::LibraryLoader::GetModuleHandleW,
-		UI::WindowsAndMessaging::*,
-	};
+	use windows::Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*};
 	use windows::core::w;
 
 	// thickness of the *external* draggable ring (logical px)
@@ -522,7 +517,7 @@ mod ring {
 						x: GET_X_LPARAM(l.0),
 						y: GET_Y_LPARAM(l.0),
 					};
-					windows::Win32::UI::WindowsAndMessaging::ClientToScreen(hwnd, &mut pt);
+					ClientToScreen(hwnd, &mut pt);
 
 					// Figure out which edge/corner ring zone the mouse is in, then
 					// ask the MAIN window to start native sizing via WM_SYSCOMMAND/SC_SIZE.
