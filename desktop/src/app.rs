@@ -443,9 +443,11 @@ fn configure_window_decorations(window: &Window) {
 #[cfg(target_os = "windows")]
 mod win_custom_frame {
 	use std::{mem::transmute, ptr::null_mut};
+	use windows::Win32::UI::Controls::MARGINS;
 	use windows::Win32::{
 		Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-		Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmIsCompositionEnabled, MARGINS},
+		Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmIsCompositionEnabled},
+		Graphics::Gdi::*,
 		UI::WindowsAndMessaging::*,
 	};
 
@@ -458,8 +460,7 @@ mod win_custom_frame {
 		style |= WS_THICKFRAME.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0;
 		SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
 
-		let mut enabled = BOOL(0);
-		let _ = DwmIsCompositionEnabled(&mut enabled);
+		let _ = DwmIsCompositionEnabled();
 		let margins = MARGINS {
 			cxLeftWidth: 0,
 			cxRightWidth: 0,
@@ -470,7 +471,7 @@ mod win_custom_frame {
 
 		OLD_WNDPROC = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
 
-		SetWindowPos(hwnd, HWND(0), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+		SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
 	}
 
 	extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -494,7 +495,6 @@ mod win_custom_frame {
 
 					let scale = get_scale(hwnd);
 					let grip = ((GRIP as f32) * scale) as i32;
-					let titlebar = ((TITLEBAR as f32) * scale) as i32;
 
 					let left = pt.x < rc.left + grip;
 					let right = pt.x >= rc.right - grip;
