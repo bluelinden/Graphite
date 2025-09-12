@@ -28,6 +28,7 @@ pub(crate) struct WinitApp {
 	cef_context: Box<dyn cef::CefContext>,
 	window: Option<Arc<Window>>,
 	cef_schedule: Option<Instant>,
+	native_window_handle: Option<native_window_windows::WindowsNativeWindowHandle>,
 	window_size_sender: Sender<WindowSize>,
 	graphics_state: Option<GraphicsState>,
 	wgpu_context: WgpuContext,
@@ -39,7 +40,6 @@ pub(crate) struct WinitApp {
 	web_communication_initialized: bool,
 	web_communication_startup_buffer: Vec<Vec<u8>>,
 	persistent_data: PersistentData,
-	chrome: Option<hybrid_chrome::HybridChromeHandle>,
 }
 
 impl WinitApp {
@@ -72,7 +72,7 @@ impl WinitApp {
 			web_communication_initialized: false,
 			web_communication_startup_buffer: Vec::new(),
 			persistent_data,
-			chrome: None,
+			native_window_handle: None,
 		}
 	}
 
@@ -298,7 +298,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 		#[cfg(target_os = "windows")]
 		{
-			self.chrome = Some(hybrid_chrome::install(&window));
+			self.native_window_handle = Some(native_window_windows::install(&window));
 		}
 
 		let window = Arc::new(window);
@@ -422,7 +422,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 }
 
 #[cfg(target_os = "windows")]
-mod hybrid_chrome {
+mod native_window_windows {
 	use std::collections::HashMap;
 	use std::ffi::c_void;
 	use std::mem::{size_of, transmute};
@@ -439,48 +439,64 @@ mod hybrid_chrome {
 	use windows::Win32::UI::WindowsAndMessaging::*;
 	use windows::core::PCWSTR;
 
-	pub struct HybridChromeHandle {
+	pub struct WindowsNativeWindowHandle {
 		hwnd: HWND,
 	}
-	impl Drop for HybridChromeHandle {
+	impl Drop for WindowsNativeWindowHandle {
 		fn drop(&mut self) {
-			let _ = unsafe { uninstall_impl(self.hwnd) };
+			let _ = unsafe { uninstall(self.hwnd) };
 		}
 	}
 
-	pub fn install(window: &Window) -> HybridChromeHandle {
-		install_with_options(
-			window,
-			Options {
-				enable_dark_caption: true,
-				backdrop: Some(1),
+	pub fn install(window: &Window) -> WindowsNativeWindowHandle {
+		let hwnd = match window.window_handle().expect("No window handle").as_raw() {
+			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+			_ => panic!("Not a Win32 window"),
+		};
+
+		let dark_mode: i32 = 1;
+		let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode as *const i32 as *const c_void, size_of::<i32>() as u32) };
+
+		let system_backdrop_type: i32 = 1;
+		let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &system_backdrop_type as *const i32 as *const c_void, size_of::<i32>() as u32) };
+
+		unsafe { ensure_helper_class() };
+		let ex = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+		let style = WS_POPUP;
+		let helper = unsafe {
+			CreateWindowExW(
+				ex,
+				PCWSTR("HybridChromeResizeBand\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
+				PCWSTR::null(),
+				style,
+				0,
+				0,
+				0,
+				0,
+				None,
+				None,
+				HINSTANCE(null_mut()),
+				Some(&hwnd as *const _ as _),
+			)
+		}
+		.expect("CreateWindowExW failed");
+
+		let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, main_window_handle_message as isize) };
+		if prev == 0 {
+			let _ = unsafe { DestroyWindow(helper) };
+			panic!("SetWindowLongPtrW failed");
+		}
+
+		state_map().lock().unwrap().insert(
+			hwnd.0 as isize,
+			State {
+				prev_wndproc: prev,
+				helper_hwnd: helper,
 			},
-		)
-	}
+		);
 
-	pub struct Options {
-		pub enable_dark_caption: bool,
-		pub backdrop: Option<i32>,
-	}
-
-	pub fn install_with_options(window: &Window, opts: Options) -> HybridChromeHandle {
-		let hwnd = hwnd_from_winit(window);
-
-		if opts.enable_dark_caption {
-			let on: i32 = 1;
-			let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on as *const _ as _, size_of::<i32>() as u32) };
-		}
-		if let Some(kind) = opts.backdrop {
-			let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &kind as *const _ as _, size_of::<i32>() as u32) };
-		}
-
-		unsafe { install_impl(hwnd) };
-
-		let mut style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
-		style &= !(WS_CAPTION.0);
-		style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as u32;
-		unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize) };
-		let _ = unsafe { SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER) };
+		unsafe { position_helper(hwnd, helper) };
+		let _ = unsafe { ShowWindow(helper, SW_SHOWNOACTIVATE) };
 
 		let mut top_glass: u32 = 1;
 		let got = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &mut top_glass as *mut _ as *mut _, size_of::<u32>() as u32) };
@@ -499,18 +515,8 @@ mod hybrid_chrome {
 
 		let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER) };
 
-		HybridChromeHandle { hwnd }
+		WindowsNativeWindowHandle { hwnd }
 	}
-
-	fn hwnd_from_winit(window: &Window) -> HWND {
-		let handle = window.window_handle().expect("no window handle").as_raw();
-		match handle {
-			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
-			_ => panic!("Not a Win32 window"),
-		}
-	}
-
-	const RESIZE_BAND_THICKNESS: i32 = 8;
 
 	static HELPER_CLASS_ATOM: OnceLock<u16> = OnceLock::new();
 	unsafe fn ensure_helper_class() {
@@ -518,7 +524,7 @@ mod hybrid_chrome {
 			let class_name: Vec<u16> = "HybridChromeResizeBand\0".encode_utf16().collect();
 			let wc = WNDCLASSW {
 				style: CS_HREDRAW | CS_VREDRAW,
-				lpfnWndProc: Some(helper_wndproc),
+				lpfnWndProc: Some(helper_window_handle_message),
 				hInstance: unsafe { GetModuleHandleW(None).unwrap().into() },
 				hIcon: HICON::default(),
 				hCursor: unsafe { LoadCursorW(HINSTANCE(null_mut()), IDC_ARROW).unwrap() },
@@ -530,68 +536,18 @@ mod hybrid_chrome {
 		});
 	}
 
-	#[derive(Clone, Copy)]
-	struct HelperData {
-		owner: HWND,
+	fn state_map() -> &'static Mutex<HashMap<isize, State>> {
+		STATE_MAP.get_or_init(|| Mutex::new(HashMap::new()))
 	}
-
+	static STATE_MAP: OnceLock<Mutex<HashMap<isize, State>>> = OnceLock::new();
 	struct State {
 		prev_wndproc: isize,
 		helper_hwnd: HWND,
 	}
-
 	unsafe impl Send for State {}
 	unsafe impl Sync for State {}
 
-	static STATE: OnceLock<Mutex<HashMap<isize, State>>> = OnceLock::new();
-	fn state_map() -> &'static Mutex<HashMap<isize, State>> {
-		STATE.get_or_init(|| Mutex::new(HashMap::new()))
-	}
-
-	unsafe fn install_impl(hwnd: HWND) {
-		unsafe { ensure_helper_class() };
-		let ex = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
-		let style = WS_POPUP;
-		let init = HelperData { owner: hwnd };
-		let helper = unsafe {
-			CreateWindowExW(
-				ex,
-				PCWSTR("HybridChromeResizeBand\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
-				PCWSTR::null(),
-				style,
-				0,
-				0,
-				0,
-				0,
-				None,
-				None,
-				HINSTANCE(null_mut()),
-				Some(&init as *const _ as _),
-			)
-		};
-
-		let Ok(helper) = helper else {
-			panic!("CreateWindowExW for resize band failed");
-		};
-
-		let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize) };
-		if prev == 0 {
-			let _ = unsafe { DestroyWindow(helper) };
-			panic!("SetWindowLongPtrW failed");
-		}
-		state_map().lock().unwrap().insert(
-			hwnd.0 as isize,
-			State {
-				prev_wndproc: prev,
-				helper_hwnd: helper,
-			},
-		);
-
-		unsafe { position_helper(hwnd, helper) };
-		let _ = unsafe { ShowWindow(helper, SW_SHOWNOACTIVATE) };
-	}
-
-	unsafe fn uninstall_impl(hwnd: HWND) {
+	unsafe fn uninstall(hwnd: HWND) {
 		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
 			let _ = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc) };
 			if state.helper_hwnd.0 != null_mut() {
@@ -604,6 +560,7 @@ mod hybrid_chrome {
 		let mut r = RECT::default();
 		let _ = unsafe { GetWindowRect(owner, &mut r) };
 
+		const RESIZE_BAND_THICKNESS: i32 = 8;
 		let x = r.left - RESIZE_BAND_THICKNESS;
 		let y = r.top - RESIZE_BAND_THICKNESS;
 		let w = (r.right - r.left) + RESIZE_BAND_THICKNESS * 2;
@@ -612,31 +569,25 @@ mod hybrid_chrome {
 		let _ = unsafe { SetWindowPos(helper, owner, x, y, w, h, SWP_NOACTIVATE) };
 	}
 
-	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+	unsafe extern "system" fn main_window_handle_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		match msg {
 			WM_NCCALCSIZE => {
 				if wparam.0 != 0 {
 					return LRESULT(0);
 				}
 			}
-
 			WM_MOVE | WM_MOVING | WM_SIZE | WM_SIZING | WM_WINDOWPOSCHANGED | WM_SHOWWINDOW => {
 				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
 					if msg == WM_SHOWWINDOW {
 						if wparam.0 == 0 {
-							unsafe {
-								let _ = ShowWindow(st.helper_hwnd, SW_HIDE);
-							};
+							let _ = unsafe { ShowWindow(st.helper_hwnd, SW_HIDE) };
 						} else {
-							unsafe {
-								let _ = ShowWindow(st.helper_hwnd, SW_SHOWNOACTIVATE);
-							};
+							let _ = unsafe { ShowWindow(st.helper_hwnd, SW_SHOWNOACTIVATE) };
 						}
 					}
 					unsafe { position_helper(hwnd, st.helper_hwnd) };
 				}
 			}
-
 			WM_DESTROY => {
 				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
 					if st.helper_hwnd.0 != null_mut() {
@@ -646,7 +597,6 @@ mod hybrid_chrome {
 					}
 				}
 			}
-
 			_ => {}
 		}
 
@@ -657,51 +607,67 @@ mod hybrid_chrome {
 		unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 	}
 
-	unsafe extern "system" fn helper_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+	unsafe extern "system" fn helper_window_handle_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		match msg {
 			WM_NCCREATE => {
 				let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
-				let init = unsafe { &*(cs.lpCreateParams as *const HelperData) };
-				unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, init.owner.0 as isize) };
+				let init = unsafe { &*(cs.lpCreateParams as *const HWND) };
+				unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, init.0 as isize) };
 				return LRESULT(1);
 			}
 			WM_ERASEBKGND => return LRESULT(1),
-
 			WM_NCHITTEST => {
-				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
-				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
-				let ht = unsafe { calculate_hit(hwnd, sx, sy) };
+				let ht = unsafe { calculate_hit(hwnd, lparam) };
 				return LRESULT(ht as isize);
 			}
-
 			WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_NCMBUTTONDOWN => {
 				let owner_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut c_void;
 				let owner = HWND(owner_ptr);
 				if unsafe { IsWindow(owner).as_bool() } {
-					let sx = (lparam.0 & 0xFFFF) as i16 as u32;
-					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
-					let ht = unsafe { calculate_hit(hwnd, sx, sy) };
-
-					let Some(wmsz) = hit_to_resize_direction(ht) else {
+					let Some(wmsz) = (unsafe { calculate_resize_direction(hwnd, lparam) }) else {
 						return LRESULT(0);
 					};
 
 					let _ = unsafe { SetForegroundWindow(owner) };
-
 					let _ = unsafe { PostMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE + wmsz) as usize), lparam) };
 					return LRESULT(0);
 				}
 				return LRESULT(HTTRANSPARENT as isize);
 			}
-
 			WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
 			_ => {}
 		}
 		unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 	}
 
-	fn hit_to_resize_direction(ht: u32) -> Option<u32> {
-		match ht {
+	unsafe fn calculate_hit(helper: HWND, lparam: LPARAM) -> u32 {
+		let x = (lparam.0 & 0xFFFF) as i16 as u32;
+		let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
+
+		let mut r = RECT::default();
+		let _ = unsafe { GetWindowRect(helper, &mut r) };
+
+		const RESIZE_BAND_THICKNESS: i32 = 8;
+		let on_top = y < (r.top + RESIZE_BAND_THICKNESS) as u32;
+		let on_right = x >= (r.right - RESIZE_BAND_THICKNESS) as u32;
+		let on_bottom = y >= (r.bottom - RESIZE_BAND_THICKNESS) as u32;
+		let on_left = x < (r.left + RESIZE_BAND_THICKNESS) as u32;
+
+		match (on_top, on_right, on_bottom, on_left) {
+			(true, _, _, true) => HTTOPLEFT,
+			(true, true, _, _) => HTTOPRIGHT,
+			(_, true, true, _) => HTBOTTOMRIGHT,
+			(_, _, true, true) => HTBOTTOMLEFT,
+			(true, _, _, _) => HTTOP,
+			(_, true, _, _) => HTRIGHT,
+			(_, _, true, _) => HTBOTTOM,
+			(_, _, _, true) => HTLEFT,
+			_ => HTTRANSPARENT as u32,
+		}
+	}
+
+	unsafe fn calculate_resize_direction(helper: HWND, lparam: LPARAM) -> Option<u32> {
+		match unsafe { calculate_hit(helper, lparam) } {
 			HTLEFT => Some(WMSZ_LEFT),
 			HTRIGHT => Some(WMSZ_RIGHT),
 			HTTOP => Some(WMSZ_TOP),
@@ -712,41 +678,5 @@ mod hybrid_chrome {
 			HTBOTTOMRIGHT => Some(WMSZ_BOTTOMRIGHT),
 			_ => None,
 		}
-	}
-
-	unsafe fn calculate_hit(helper: HWND, x: u32, y: u32) -> u32 {
-		let mut r = RECT::default();
-		let _ = unsafe { GetWindowRect(helper, &mut r) };
-
-		let on_left = x < (r.left + RESIZE_BAND_THICKNESS) as u32;
-		let on_right = x >= (r.right - RESIZE_BAND_THICKNESS) as u32;
-		let on_top = y < (r.top + RESIZE_BAND_THICKNESS) as u32;
-		let on_bottom = y >= (r.bottom - RESIZE_BAND_THICKNESS) as u32;
-
-		if on_top && on_left {
-			return HTTOPLEFT;
-		}
-		if on_top && on_right {
-			return HTTOPRIGHT;
-		}
-		if on_bottom && on_left {
-			return HTBOTTOMLEFT;
-		}
-		if on_bottom && on_right {
-			return HTBOTTOMRIGHT;
-		}
-		if on_top {
-			return HTTOP;
-		}
-		if on_left {
-			return HTLEFT;
-		}
-		if on_right {
-			return HTRIGHT;
-		}
-		if on_bottom {
-			return HTBOTTOM;
-		}
-		HTTRANSPARENT as u32
 	}
 }
