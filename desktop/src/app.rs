@@ -423,13 +423,13 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 #[cfg(target_os = "windows")]
 mod hybrid_chrome {
+	use std::ffi::c_void;
 	use std::{
 		collections::HashMap,
 		mem::{MaybeUninit, size_of, transmute},
 		ptr::{null, null_mut},
 		sync::{Mutex, OnceLock},
 	};
-
 	use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
 	use winit::window::Window;
 
@@ -581,6 +581,7 @@ mod hybrid_chrome {
 		let _atom = ensure_helper_class();
 		let ex = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW; // non-activating, no taskbar
 		let style = WS_POPUP; // top-level popup so it can extend outside owner
+		let init = HelperData { owner: hwnd };
 		let helper = CreateWindowExW(
 			ex,
 			PCWSTR("HybridChromeResizeBand\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
@@ -593,7 +594,7 @@ mod hybrid_chrome {
 			None,
 			None,
 			HINSTANCE(null_mut()),
-			Some(&HelperData { owner: hwnd } as *const _ as _),
+			Some(&init as *const _ as _),
 		);
 
 		let Ok(helper) = helper else {
@@ -659,6 +660,10 @@ mod hybrid_chrome {
 
 	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		match msg {
+			WM_SYSCOMMAND | WM_SIZING | WM_ENTERSIZEMOVE => {
+				println!("Owner WM_SYSCOMMAND {}", wparam.0);
+			}
+
 			WM_NCCALCSIZE => {
 				if wparam.0 != 0 {
 					return LRESULT(0);
@@ -691,6 +696,8 @@ mod hybrid_chrome {
 			_ => {}
 		}
 
+		println!("Owner msg {}", msg);
+
 		let prev = state_map().lock().unwrap().get(&(hwnd.0 as isize)).map(|s| s.prev_wndproc).unwrap_or(0);
 		if prev != 0 {
 			return CallWindowProcW(transmute(prev), hwnd, msg, wparam, lparam);
@@ -703,7 +710,9 @@ mod hybrid_chrome {
 		match msg {
 			WM_NCCREATE => {
 				let cs = &*(lparam.0 as *const CREATESTRUCTW);
-				SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+				// Copy the HWND value (not a pointer to stack data) into GWLP_USERDATA
+				let init = &*(cs.lpCreateParams as *const HelperData);
+				SetWindowLongPtrW(hwnd, GWLP_USERDATA, init.owner.0 as isize);
 				return LRESULT(1);
 			}
 			WM_ERASEBKGND => return LRESULT(1),
@@ -721,10 +730,10 @@ mod hybrid_chrome {
 
 			// Any non-client mouse press should start the system operation on the OWNER.
 			WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_NCMBUTTONDOWN => {
-				let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const HelperData;
-				let owner = if !data.is_null() { (*data).owner } else { HWND::default() };
-
-				if owner.0 != std::ptr::null_mut() {
+				// Read the stored HWND value and validate it
+				let owner_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut c_void;
+				let owner = HWND(owner_ptr);
+				if IsWindow(owner).as_bool() {
 					let sx = (lparam.0 & 0xFFFF) as i16 as u32;
 					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
 					let ht = helper_hit(hwnd, sx, sy);
@@ -735,21 +744,15 @@ mod hybrid_chrome {
 						return LRESULT(0);
 					};
 
-					// SendMessageW(owner, WM_NCLBUTTONDOWN, WPARAM(ht as usize), LPARAM(packed as isize));
 					SetForegroundWindow(owner);
 
-					let mut style = GetWindowLongPtrW(owner, GWL_STYLE) as u32;
-					style &= !(WS_CAPTION.0);
-					style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as u32;
-					SetWindowLongPtrW(owner, GWL_STYLE, style as isize);
-					SetWindowPos(owner, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-
-					PostMessageW(
-						owner,
-						WM_SYSCOMMAND,
-						WPARAM((SC_SIZE + wmsz) as usize), // note: '+' and '|' are the same numerically here, but '+' matches docs
-						lparam,
-					);
+					let ok = PostMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE + wmsz) as usize), lparam);
+					if ok.is_err() {
+						let err = windows::Win32::Foundation::GetLastError().0;
+						println!("[helper] PostMessage failed, GLE={}", err);
+					} else {
+						println!("[helper] post SC_SIZE+{} ok={:?}", wmsz, ok);
+					}
 					return LRESULT(0);
 				}
 				// Not our ring → let other windows handle it.
