@@ -298,7 +298,7 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 		#[cfg(target_os = "windows")]
 		{
-			self.chrome = Some(hybrid_chrome::install(&window, 36));
+			self.chrome = Some(hybrid_chrome::install(&window));
 		}
 
 		let window = Arc::new(window);
@@ -423,35 +423,22 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 #[cfg(target_os = "windows")]
 mod hybrid_chrome {
+	use std::collections::HashMap;
 	use std::ffi::c_void;
-	use std::{
-		collections::HashMap,
-		mem::{MaybeUninit, size_of, transmute},
-		ptr::{null, null_mut},
-		sync::{Mutex, OnceLock},
-	};
+	use std::mem::{size_of, transmute};
+	use std::ptr::null_mut;
+	use std::sync::{Mutex, OnceLock};
+
 	use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
 	use winit::window::Window;
 
-	use windows::{
-		Win32::{
-			Foundation::*,
-			Graphics::{
-				Dwm::*,
-				Gdi::{GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
-			},
-			System::{LibraryLoader::GetModuleHandleW, SystemInformation::*},
-			UI::{
-				Controls::MARGINS,
-				HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
-				Input::KeyboardAndMouse::*,
-				WindowsAndMessaging::*,
-			},
-		},
-		core::PCWSTR,
-	};
+	use windows::Win32::Foundation::*;
+	use windows::Win32::Graphics::{Dwm::*, Gdi::HBRUSH};
+	use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+	use windows::Win32::UI::Controls::MARGINS;
+	use windows::Win32::UI::WindowsAndMessaging::*;
+	use windows::core::PCWSTR;
 
-	/// Keep this alive while installed; Drop restores the original WndProc and destroys helper band.
 	pub struct HybridChromeHandle {
 		hwnd: HWND,
 	}
@@ -461,21 +448,17 @@ mod hybrid_chrome {
 		}
 	}
 
-	/// Install borderless (NCCALCSIZE) + hit-testing. `caption_height_px` is the
-	/// draggable band you’ll draw into at the top of your **client** area.
-	pub fn install(window: &Window, caption_height_px: i32) -> HybridChromeHandle {
+	pub fn install(window: &Window) -> HybridChromeHandle {
 		install_with_options(
 			window,
 			Options {
-				caption_height_px,
 				enable_dark_caption: true,
-				backdrop: Some(1), // 1=Mica (Win11), 2=Acrylic, 3=Tabbed; None to skip
+				backdrop: Some(1),
 			},
 		)
 	}
 
 	pub struct Options {
-		pub caption_height_px: i32,
 		pub enable_dark_caption: bool,
 		pub backdrop: Option<i32>,
 	}
@@ -483,45 +466,38 @@ mod hybrid_chrome {
 	pub fn install_with_options(window: &Window, opts: Options) -> HybridChromeHandle {
 		let hwnd = hwnd_from_winit(window);
 
-		unsafe {
-			// Optional: dark caption + system backdrop (no-op on unsupported builds)
-			if opts.enable_dark_caption {
-				let on: i32 = 1;
-				let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on as *const _ as _, size_of::<i32>() as u32);
-			}
-			if let Some(kind) = opts.backdrop {
-				let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &kind as *const _ as _, size_of::<i32>() as u32);
-			}
-
-			install_impl(hwnd, opts.caption_height_px);
-
-			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-			style &= !(WS_CAPTION.0);
-			style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as u32;
-			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
-			SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-
-			let mut top_glass: u32 = 1;
-			let got = DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &mut top_glass as *mut _ as *mut _, size_of::<u32>() as u32);
-			let margins = MARGINS {
-				cxLeftWidth: 0,
-				cxRightWidth: 0,
-				cyBottomHeight: 0,
-				cyTopHeight: if got.is_ok() { top_glass as i32 } else { 1 },
-			};
-			let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+		if opts.enable_dark_caption {
+			let on: i32 = 1;
+			let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on as *const _ as _, size_of::<i32>() as u32) };
+		}
+		if let Some(kind) = opts.backdrop {
+			let _ = unsafe { DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &kind as *const _ as _, size_of::<i32>() as u32) };
 		}
 
-		unsafe {
-			// Remove system caption but keep thickframe (snap/shadow) and control boxes if you want them.
-			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as usize;
-			style &= !(WS_CAPTION.0 as usize);
-			style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as usize;
-			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+		unsafe { install_impl(hwnd) };
 
-			// Re-evaluate the frame
-			SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-		}
+		let mut style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+		style &= !(WS_CAPTION.0);
+		style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as u32;
+		unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize) };
+		let _ = unsafe { SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER) };
+
+		let mut top_glass: u32 = 1;
+		let got = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &mut top_glass as *mut _ as *mut _, size_of::<u32>() as u32) };
+		let margins = MARGINS {
+			cxLeftWidth: 0,
+			cxRightWidth: 0,
+			cyBottomHeight: 0,
+			cyTopHeight: if got.is_ok() { top_glass as i32 } else { 1 },
+		};
+		let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) };
+
+		let mut style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as usize;
+		style &= !(WS_CAPTION.0 as usize);
+		style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as usize;
+		unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize) };
+
+		let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER) };
 
 		HybridChromeHandle { hwnd }
 	}
@@ -534,25 +510,24 @@ mod hybrid_chrome {
 		}
 	}
 
-	// ===== helper "resize band" window (option #2) =====
 	const RESIZE_BAND_THICKNESS: i32 = 8;
 
 	static HELPER_CLASS_ATOM: OnceLock<u16> = OnceLock::new();
-	unsafe fn ensure_helper_class() -> u16 {
-		*HELPER_CLASS_ATOM.get_or_init(|| {
+	unsafe fn ensure_helper_class() {
+		let _ = *HELPER_CLASS_ATOM.get_or_init(|| {
 			let class_name: Vec<u16> = "HybridChromeResizeBand\0".encode_utf16().collect();
 			let wc = WNDCLASSW {
 				style: CS_HREDRAW | CS_VREDRAW,
 				lpfnWndProc: Some(helper_wndproc),
-				hInstance: GetModuleHandleW(None).unwrap().into(),
+				hInstance: unsafe { GetModuleHandleW(None).unwrap().into() },
 				hIcon: HICON::default(),
-				hCursor: LoadCursorW(HINSTANCE(null_mut()), IDC_ARROW).unwrap(),
-				hbrBackground: HBRUSH::default(), // no paint (we handle WM_ERASEBKGND)
+				hCursor: unsafe { LoadCursorW(HINSTANCE(null_mut()), IDC_ARROW).unwrap() },
+				hbrBackground: HBRUSH::default(),
 				lpszClassName: PCWSTR(class_name.as_ptr()),
 				..Default::default()
 			};
-			RegisterClassW(&wc)
-		})
+			unsafe { RegisterClassW(&wc) }
+		});
 	}
 
 	#[derive(Clone, Copy)]
@@ -560,14 +535,11 @@ mod hybrid_chrome {
 		owner: HWND,
 	}
 
-	// Store both state and helper HWND per owner.
 	struct State {
 		prev_wndproc: isize,
-		caption_height_px: i32,
 		helper_hwnd: HWND,
 	}
 
-	// SAFETY: HWND is only used on the main thread and not shared across threads.
 	unsafe impl Send for State {}
 	unsafe impl Sync for State {}
 
@@ -576,119 +548,101 @@ mod hybrid_chrome {
 		STATE.get_or_init(|| Mutex::new(HashMap::new()))
 	}
 
-	unsafe fn install_impl(hwnd: HWND, caption_height_px: i32) {
-		// Create helper band window first (so we can position it right away)
-		let _atom = ensure_helper_class();
-		let ex = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW; // non-activating, no taskbar
-		let style = WS_POPUP; // top-level popup so it can extend outside owner
+	unsafe fn install_impl(hwnd: HWND) {
+		unsafe { ensure_helper_class() };
+		let ex = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+		let style = WS_POPUP;
 		let init = HelperData { owner: hwnd };
-		let helper = CreateWindowExW(
-			ex,
-			PCWSTR("HybridChromeResizeBand\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
-			PCWSTR::null(),
-			style,
-			0,
-			0,
-			0,
-			0,
-			None,
-			None,
-			HINSTANCE(null_mut()),
-			Some(&init as *const _ as _),
-		);
+		let helper = unsafe {
+			CreateWindowExW(
+				ex,
+				PCWSTR("HybridChromeResizeBand\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
+				PCWSTR::null(),
+				style,
+				0,
+				0,
+				0,
+				0,
+				None,
+				None,
+				HINSTANCE(null_mut()),
+				Some(&init as *const _ as _),
+			)
+		};
 
 		let Ok(helper) = helper else {
 			panic!("CreateWindowExW for resize band failed");
 		};
 
-		// Subclass owner
-		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+		let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize) };
 		if prev == 0 {
-			DestroyWindow(helper);
+			let _ = unsafe { DestroyWindow(helper) };
 			panic!("SetWindowLongPtrW failed");
 		}
 		state_map().lock().unwrap().insert(
 			hwnd.0 as isize,
 			State {
 				prev_wndproc: prev,
-				caption_height_px,
 				helper_hwnd: helper,
 			},
 		);
 
-		// Position helper now and show it (no activation)
-		position_helper(hwnd, helper);
-		ShowWindow(helper, SW_SHOWNOACTIVATE);
+		unsafe { position_helper(hwnd, helper) };
+		let _ = unsafe { ShowWindow(helper, SW_SHOWNOACTIVATE) };
 	}
 
 	unsafe fn uninstall_impl(hwnd: HWND) {
 		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
-			let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc);
+			let _ = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc) };
 			if state.helper_hwnd.0 != null_mut() {
-				DestroyWindow(state.helper_hwnd);
+				let _ = unsafe { DestroyWindow(state.helper_hwnd) };
 			}
 		}
 	}
 
 	unsafe fn position_helper(owner: HWND, helper: HWND) {
 		let mut r = RECT::default();
-		GetWindowRect(owner, &mut r);
+		let _ = unsafe { GetWindowRect(owner, &mut r) };
 
-		// Expand by thickness on all sides
 		let x = r.left - RESIZE_BAND_THICKNESS;
 		let y = r.top - RESIZE_BAND_THICKNESS;
 		let w = (r.right - r.left) + RESIZE_BAND_THICKNESS * 2;
 		let h = (r.bottom - r.top) + RESIZE_BAND_THICKNESS * 2;
 
-		// Keep helper above owner (but not topmost globally)
-		SetWindowPos(
-			helper,
-			owner, // insert after owner -> ends up just above it
-			x,
-			y,
-			w,
-			h,
-			SWP_NOACTIVATE,
-		);
-	}
-
-	#[repr(C)]
-	struct NCCALCSIZE_PARAMS {
-		rgrc: [RECT; 3],
-		lppos: *mut windows::Win32::UI::WindowsAndMessaging::WINDOWPOS,
+		let _ = unsafe { SetWindowPos(helper, owner, x, y, w, h, SWP_NOACTIVATE) };
 	}
 
 	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		match msg {
-			WM_SYSCOMMAND | WM_SIZING | WM_ENTERSIZEMOVE => {
-				println!("Owner WM_SYSCOMMAND {}", wparam.0);
-			}
-
 			WM_NCCALCSIZE => {
 				if wparam.0 != 0 {
 					return LRESULT(0);
 				}
 			}
 
-			// Keep helper synced with owner moves/resizes/shows/hides.
 			WM_MOVE | WM_MOVING | WM_SIZE | WM_SIZING | WM_WINDOWPOSCHANGED | WM_SHOWWINDOW => {
 				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
 					if msg == WM_SHOWWINDOW {
 						if wparam.0 == 0 {
-							ShowWindow(st.helper_hwnd, SW_HIDE);
+							unsafe {
+								let _ = ShowWindow(st.helper_hwnd, SW_HIDE);
+							};
 						} else {
-							ShowWindow(st.helper_hwnd, SW_SHOWNOACTIVATE);
+							unsafe {
+								let _ = ShowWindow(st.helper_hwnd, SW_SHOWNOACTIVATE);
+							};
 						}
 					}
-					position_helper(hwnd, st.helper_hwnd);
+					unsafe { position_helper(hwnd, st.helper_hwnd) };
 				}
 			}
 
 			WM_DESTROY => {
-				// Owner being destroyed—clean up helper.
 				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
 					if st.helper_hwnd.0 != null_mut() {
-						DestroyWindow(st.helper_hwnd);
+						unsafe {
+							let _ = DestroyWindow(st.helper_hwnd);
+						};
 					}
 				}
 			}
@@ -696,76 +650,57 @@ mod hybrid_chrome {
 			_ => {}
 		}
 
-		println!("Owner msg {}", msg);
-
 		let prev = state_map().lock().unwrap().get(&(hwnd.0 as isize)).map(|s| s.prev_wndproc).unwrap_or(0);
 		if prev != 0 {
-			return CallWindowProcW(transmute(prev), hwnd, msg, wparam, lparam);
+			return unsafe { CallWindowProcW(transmute(prev), hwnd, msg, wparam, lparam) };
 		}
-		DefWindowProcW(hwnd, msg, wparam, lparam)
+		unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 	}
 
-	// ===== helper window proc =====
 	unsafe extern "system" fn helper_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		match msg {
 			WM_NCCREATE => {
-				let cs = &*(lparam.0 as *const CREATESTRUCTW);
-				// Copy the HWND value (not a pointer to stack data) into GWLP_USERDATA
-				let init = &*(cs.lpCreateParams as *const HelperData);
-				SetWindowLongPtrW(hwnd, GWLP_USERDATA, init.owner.0 as isize);
+				let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
+				let init = unsafe { &*(cs.lpCreateParams as *const HelperData) };
+				unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, init.owner.0 as isize) };
 				return LRESULT(1);
 			}
 			WM_ERASEBKGND => return LRESULT(1),
 
-			// Still report which part we're over.
 			WM_NCHITTEST => {
 				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
 				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
-
-				println!("Helper WM_NCHITTEST at {},{} -> ", sx, sy);
-
-				let ht = helper_hit(hwnd, sx, sy);
+				let ht = unsafe { calculate_hit(hwnd, sx, sy) };
 				return LRESULT(ht as isize);
 			}
 
-			// Any non-client mouse press should start the system operation on the OWNER.
 			WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_NCMBUTTONDOWN => {
-				// Read the stored HWND value and validate it
-				let owner_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut c_void;
+				let owner_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut c_void;
 				let owner = HWND(owner_ptr);
-				if IsWindow(owner).as_bool() {
+				if unsafe { IsWindow(owner).as_bool() } {
 					let sx = (lparam.0 & 0xFFFF) as i16 as u32;
 					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
-					let ht = helper_hit(hwnd, sx, sy);
+					let ht = unsafe { calculate_hit(hwnd, sx, sy) };
 
-					println!(" -> HT={}", ht);
-
-					let Some(wmsz) = ht_to_wmsz(ht) else {
+					let Some(wmsz) = hit_to_resize_direction(ht) else {
 						return LRESULT(0);
 					};
 
-					SetForegroundWindow(owner);
+					let _ = unsafe { SetForegroundWindow(owner) };
 
-					let ok = PostMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE + wmsz) as usize), lparam);
-					if ok.is_err() {
-						let err = windows::Win32::Foundation::GetLastError().0;
-						println!("[helper] PostMessage failed, GLE={}", err);
-					} else {
-						println!("[helper] post SC_SIZE+{} ok={:?}", wmsz, ok);
-					}
+					let _ = unsafe { PostMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE + wmsz) as usize), lparam) };
 					return LRESULT(0);
 				}
-				// Not our ring → let other windows handle it.
 				return LRESULT(HTTRANSPARENT as isize);
 			}
 
 			WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
 			_ => {}
 		}
-		DefWindowProcW(hwnd, msg, wparam, lparam)
+		unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 	}
 
-	fn ht_to_wmsz(ht: u32) -> Option<u32> {
+	fn hit_to_resize_direction(ht: u32) -> Option<u32> {
 		match ht {
 			HTLEFT => Some(WMSZ_LEFT),
 			HTRIGHT => Some(WMSZ_RIGHT),
@@ -779,14 +714,14 @@ mod hybrid_chrome {
 		}
 	}
 
-	unsafe fn helper_hit(helper: HWND, sx: u32, sy: u32) -> u32 {
+	unsafe fn calculate_hit(helper: HWND, x: u32, y: u32) -> u32 {
 		let mut r = RECT::default();
-		GetWindowRect(helper, &mut r);
+		let _ = unsafe { GetWindowRect(helper, &mut r) };
 
-		let on_left = sx < (r.left + RESIZE_BAND_THICKNESS) as u32;
-		let on_right = sx >= (r.right - RESIZE_BAND_THICKNESS) as u32;
-		let on_top = sy < (r.top + RESIZE_BAND_THICKNESS) as u32;
-		let on_bottom = sy >= (r.bottom - RESIZE_BAND_THICKNESS) as u32;
+		let on_left = x < (r.left + RESIZE_BAND_THICKNESS) as u32;
+		let on_right = x >= (r.right - RESIZE_BAND_THICKNESS) as u32;
+		let on_top = y < (r.top + RESIZE_BAND_THICKNESS) as u32;
+		let on_bottom = y >= (r.bottom - RESIZE_BAND_THICKNESS) as u32;
 
 		if on_top && on_left {
 			return HTTOPLEFT;
