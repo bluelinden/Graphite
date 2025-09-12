@@ -39,6 +39,7 @@ pub(crate) struct WinitApp {
 	web_communication_initialized: bool,
 	web_communication_startup_buffer: Vec<Vec<u8>>,
 	persistent_data: PersistentData,
+	chrome: Option<hybrid_chrome::HybridChromeHandle>,
 }
 
 impl WinitApp {
@@ -71,6 +72,7 @@ impl WinitApp {
 			web_communication_initialized: false,
 			web_communication_startup_buffer: Vec::new(),
 			persistent_data,
+			chrome: None,
 		}
 	}
 
@@ -295,7 +297,9 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 		let window = event_loop.create_window(window).unwrap();
 
 		#[cfg(target_os = "windows")]
-		let _chrome = hybrid_chrome::install(&window, 36).unwrap();
+		{
+			self.chrome = Some(hybrid_chrome::install(&window, 36));
+		}
 
 		let window = Arc::new(window);
 		let graphics_state = GraphicsState::new(window.clone(), self.wgpu_context.clone());
@@ -419,22 +423,21 @@ impl ApplicationHandler<CustomEvent> for WinitApp {
 
 #[cfg(target_os = "windows")]
 mod hybrid_chrome {
-	#![cfg(windows)]
-
 	use std::{
 		collections::HashMap,
 		mem::size_of,
 		sync::{Mutex, OnceLock},
 	};
-
-	use anyhow::{Result, anyhow};
-	use raw_window_handle::HasWindowHandle;
+	use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+	use windows::Win32::Foundation::LPARAM;
+	use windows::Win32::Foundation::WPARAM;
 	use winit::window::Window;
 
+	use windows::Win32::UI::Controls::MARGINS;
 	use windows::Win32::{
 		Foundation::{HWND, LRESULT, RECT},
-		Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute, DwmSetWindowAttribute, MARGINS},
-		UI::WindowsAndMessaging::{CallWindowProcW, DefWindowProcW, GWLP_WNDPROC, GetWindowLongPtrW, GetWindowRect, HTCAPTION, HTCLIENT, SetWindowLongPtrW, WM_NCHITTEST},
+		Graphics::Dwm::{DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute, DwmSetWindowAttribute},
+		UI::WindowsAndMessaging::{CallWindowProcW, DefWindowProcW, GWLP_WNDPROC, GetWindowRect, HTCAPTION, HTCLIENT, SetWindowLongPtrW, WM_NCHITTEST},
 	};
 
 	/// Keep this alive while the window lives; drop restores the original WndProc.
@@ -448,13 +451,13 @@ mod hybrid_chrome {
 		}
 	}
 
-	pub fn install(window: &Window, caption_height_px: i32) -> Result<HybridChromeHandle> {
+	pub fn install(window: &Window, caption_height_px: i32) -> HybridChromeHandle {
 		install_with_options(
 			window,
 			Options {
 				caption_height_px,
 				enable_dark_caption: true,
-				backdrop: Some(1),
+				backdrop: Some(0),
 			},
 		)
 	}
@@ -465,8 +468,8 @@ mod hybrid_chrome {
 		pub backdrop: Option<i32>,
 	}
 
-	pub fn install_with_options(window: &Window, opts: Options) -> Result<HybridChromeHandle> {
-		let hwnd = hwnd_from_winit(window)?;
+	pub fn install_with_options(window: &Window, opts: Options) -> HybridChromeHandle {
+		let hwnd = hwnd_from_winit(window);
 
 		unsafe {
 			let margins = MARGINS {
@@ -485,18 +488,17 @@ mod hybrid_chrome {
 				let _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &kind as *const _ as _, size_of::<i32>() as u32);
 			}
 
-			install_impl(hwnd, opts.caption_height_px)?;
+			install_impl(hwnd, opts.caption_height_px);
 		}
 
-		Ok(HybridChromeHandle { hwnd })
+		HybridChromeHandle { hwnd }
 	}
 
-	fn hwnd_from_winit(window: &Window) -> Result<HWND> {
-		use raw_window_handle::{RawWindowHandle, Win32WindowHandle};
-		let handle = window.window_handle()?.as_raw();
+	fn hwnd_from_winit(window: &Window) -> HWND {
+		let handle = window.window_handle().expect("Failed to get window handle").as_raw();
 		match handle {
-			RawWindowHandle::Win32(h) => Ok(HWND(h.hwnd.get() as *mut std::ffi::c_void)),
-			_ => Err(anyhow!("Not a Win32 window")),
+			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
+			_ => panic!("Not a Win32 window"),
 		}
 	}
 
@@ -510,33 +512,31 @@ mod hybrid_chrome {
 		STATE.get_or_init(|| Mutex::new(HashMap::new()))
 	}
 
-	unsafe fn install_impl(hwnd: HWND, caption_height_px: i32) -> Result<()> {
-		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
+	unsafe fn install_impl(hwnd: HWND, caption_height_px: i32) {
+		let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize) };
 		if prev == 0 {
-			return Err(anyhow!("SetWindowLongPtrW failed"));
+			panic!("SetWindowLongPtrW failed");
 		}
 		state_map().lock().unwrap().insert(
-			hwnd.0,
+			hwnd.0 as isize,
 			State {
 				prev_wndproc: prev,
 				caption_height_px,
 			},
 		);
-		Ok(())
 	}
 
-	unsafe fn uninstall_impl(hwnd: HWND) -> Result<()> {
-		if let Some(state) = state_map().lock().unwrap().remove(&hwnd.0) {
+	unsafe fn uninstall_impl(hwnd: HWND) {
+		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
 			let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc);
 		}
-		Ok(())
 	}
 
-	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> LRESULT {
+	unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 		if msg == WM_NCHITTEST {
-			if let Some(st) = state_map().lock().unwrap().get(&hwnd.0) {
-				let sx = (lparam & 0xFFFF) as i16 as i32;
-				let sy = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+			if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
+				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
 
 				let mut wr = RECT::default();
 				GetWindowRect(hwnd, &mut wr);
@@ -557,7 +557,7 @@ mod hybrid_chrome {
 			}
 		}
 
-		let prev = state_map().lock().unwrap().get(&hwnd.0).map(|s| s.prev_wndproc).unwrap_or(0);
+		let prev = state_map().lock().unwrap().get(&(hwnd.0 as isize)).map(|s| s.prev_wndproc).unwrap_or(0);
 		if prev != 0 {
 			return CallWindowProcW(std::mem::transmute(prev), hwnd, msg, wparam, lparam);
 		}

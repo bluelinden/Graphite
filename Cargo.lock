@@ -2276,7 +2276,6 @@ dependencies = [
  "objc2-io-surface",
  "objc2-metal 0.3.1",
  "open",
- "raw-window-handle",
  "rfd",
  "ron",
  "serde",
