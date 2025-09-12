@@ -426,25 +426,28 @@ mod hybrid_chrome {
 	use std::{
 		collections::HashMap,
 		mem::{MaybeUninit, size_of, transmute},
-		ptr::null_mut,
+		ptr::{null, null_mut},
 		sync::{Mutex, OnceLock},
 	};
 
 	use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
 	use winit::window::Window;
 
-	use windows::Win32::{
-		Foundation::*,
-		Graphics::{
-			Dwm::*,
-			Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
+	use windows::{
+		Win32::{
+			Foundation::*,
+			Graphics::{
+				Dwm::*,
+				Gdi::{GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
+			},
+			System::{LibraryLoader::GetModuleHandleW, SystemInformation::*},
+			UI::{
+				Controls::MARGINS,
+				HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
+				WindowsAndMessaging::*,
+			},
 		},
-		System::SystemInformation::*,
-		UI::{
-			Controls::MARGINS,
-			HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
-			WindowsAndMessaging::*,
-		},
+		core::PCWSTR,
 	};
 
 	/// Keep this alive while installed; Drop restores the original WndProc and destroys helper band.
@@ -527,17 +530,17 @@ mod hybrid_chrome {
 	// ===== helper "resize band" window (option #2) =====
 	const RESIZE_BAND_THICKNESS: i32 = 8;
 
-	static HELPER_CLASS_ATOM: OnceLock<ATOM> = OnceLock::new();
-	unsafe fn ensure_helper_class() -> ATOM {
+	static HELPER_CLASS_ATOM: OnceLock<u16> = OnceLock::new();
+	unsafe fn ensure_helper_class() -> u16 {
 		*HELPER_CLASS_ATOM.get_or_init(|| {
 			let class_name: Vec<u16> = "HybridChromeResizeBand\0".encode_utf16().collect();
 			let wc = WNDCLASSW {
 				style: CS_HREDRAW | CS_VREDRAW,
 				lpfnWndProc: Some(helper_wndproc),
-				hInstance: GetModuleHandleW(None).unwrap(),
-				hIcon: HICON(0),
-				hCursor: LoadCursorW(HINSTANCE(0), IDC_ARROW).unwrap(),
-				hbrBackground: HBRUSH(0), // no paint (we handle WM_ERASEBKGND)
+				hInstance: GetModuleHandleW(None).unwrap().into(),
+				hIcon: HICON::default(),
+				hCursor: LoadCursorW(HINSTANCE(null_mut()), IDC_ARROW).unwrap(),
+				hbrBackground: HBRUSH::default(), // no paint (we handle WM_ERASEBKGND)
 				lpszClassName: PCWSTR(class_name.as_ptr()),
 				..Default::default()
 			};
@@ -556,6 +559,10 @@ mod hybrid_chrome {
 		caption_height_px: i32,
 		helper_hwnd: HWND,
 	}
+
+	// SAFETY: HWND is only used on the main thread and not shared across threads.
+	unsafe impl Send for State {}
+	unsafe impl Sync for State {}
 
 	static STATE: OnceLock<Mutex<HashMap<isize, State>>> = OnceLock::new();
 	fn state_map() -> &'static Mutex<HashMap<isize, State>> {
@@ -578,13 +585,13 @@ mod hybrid_chrome {
 			0,
 			None,
 			None,
-			HINSTANCE(0),
+			HINSTANCE(null_mut()),
 			Some(&HelperData { owner: hwnd } as *const _ as _),
 		);
 
-		if helper.0 == 0 {
+		let Ok(helper) = helper else {
 			panic!("CreateWindowExW for resize band failed");
-		}
+		};
 
 		// Subclass owner
 		let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wndproc as isize);
@@ -609,7 +616,7 @@ mod hybrid_chrome {
 	unsafe fn uninstall_impl(hwnd: HWND) {
 		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
 			let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc);
-			if state.helper_hwnd.0 != 0 {
+			if state.helper_hwnd.0 != null_mut() {
 				DestroyWindow(state.helper_hwnd);
 			}
 		}
@@ -653,7 +660,7 @@ mod hybrid_chrome {
 
 			// Keep helper synced with owner moves/resizes/shows/hides.
 			WM_MOVE | WM_MOVING | WM_SIZE | WM_SIZING | WM_WINDOWPOSCHANGED | WM_SHOWWINDOW => {
-				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)).cloned() {
+				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
 					if msg == WM_SHOWWINDOW {
 						if wparam.0 == 0 {
 							ShowWindow(st.helper_hwnd, SW_HIDE);
@@ -667,8 +674,8 @@ mod hybrid_chrome {
 
 			WM_DESTROY => {
 				// Owner being destroyed—clean up helper.
-				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)).cloned() {
-					if st.helper_hwnd.0 != 0 {
+				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
+					if st.helper_hwnd.0 != null_mut() {
 						DestroyWindow(st.helper_hwnd);
 					}
 				}
@@ -744,7 +751,7 @@ mod hybrid_chrome {
 				// Stash owner HWND in GWLP_USERDATA
 				let cs = &*(lparam.0 as *const CREATESTRUCTW);
 				SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
-				LRESULT(1)
+				return LRESULT(1);
 			}
 			WM_ERASEBKGND => {
 				// Don’t draw anything = visually invisible
@@ -752,7 +759,7 @@ mod hybrid_chrome {
 			}
 			WM_NCHITTEST => {
 				let data = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const HelperData;
-				let owner = if !data.is_null() { (*data).owner } else { HWND(0) };
+				let owner = if !data.is_null() { (*data).owner } else { HWND::default() };
 
 				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
 				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
