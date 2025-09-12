@@ -444,6 +444,7 @@ mod hybrid_chrome {
 			UI::{
 				Controls::MARGINS,
 				HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
+				Input::KeyboardAndMouse::*,
 				WindowsAndMessaging::*,
 			},
 		},
@@ -681,61 +682,6 @@ mod hybrid_chrome {
 				}
 			}
 
-			// Optional: draggable caption area inside client
-			WM_NCHITTEST => {
-				if let Some(st) = state_map().lock().unwrap().get(&(hwnd.0 as isize)) {
-					let sx = (lparam.0 & 0xFFFF) as i16 as i32;
-					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-
-					println!("WM_NCHITTEST at {},{}", sx, sy);
-
-					let mut wr = RECT::default();
-					GetWindowRect(hwnd, &mut wr);
-					let px = sx - wr.left;
-					let py = sy - wr.top;
-
-					let ww = wr.right - wr.left;
-					let frame_x = 4;
-					let frame_y = 4;
-
-					let on_left = px < frame_x;
-					let on_right = px >= ww - frame_x;
-					let on_top = py < frame_y;
-					let on_bottom = py >= (wr.bottom - wr.top) - frame_y;
-
-					if on_top && on_left {
-						return LRESULT(HTTOPLEFT as isize);
-					}
-					if on_top && on_right {
-						return LRESULT(HTTOPRIGHT as isize);
-					}
-					if on_bottom && on_left {
-						return LRESULT(HTBOTTOMLEFT as isize);
-					}
-					if on_bottom && on_right {
-						return LRESULT(HTBOTTOMRIGHT as isize);
-					}
-					if on_top {
-						return LRESULT(HTTOP as isize);
-					}
-					if on_left {
-						return LRESULT(HTLEFT as isize);
-					}
-					if on_right {
-						return LRESULT(HTRIGHT as isize);
-					}
-					if on_bottom {
-						return LRESULT(HTBOTTOM as isize);
-					}
-
-					// Caption drag band inside client (avoid buttons if you draw them)
-					if py >= 0 && py < st.caption_height_px {
-						return LRESULT(HTCAPTION as isize);
-					}
-					return LRESULT(HTCLIENT as isize);
-				}
-			}
-
 			_ => {}
 		}
 
@@ -760,6 +706,9 @@ mod hybrid_chrome {
 			WM_NCHITTEST => {
 				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
 				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
+
+				println!("Helper WM_NCHITTEST at {},{} -> ", sx, sy);
+
 				let ht = helper_hit(hwnd, sx, sy);
 				return LRESULT(ht as isize);
 			}
@@ -770,23 +719,17 @@ mod hybrid_chrome {
 				let owner = if !data.is_null() { (*data).owner } else { HWND::default() };
 
 				if owner.0 != std::ptr::null_mut() {
-					let sx = (lparam.0 & 0xFFFF) as i16 as i32;
-					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+					let sx = (lparam.0 & 0xFFFF) as i16 as u32;
+					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
 					let ht = helper_hit(hwnd, sx, sy);
 
-					// Start MOVE if we ever decide to treat some area as caption in the helper.
-					if ht == HTCAPTION {
-						ReleaseCapture();
-						// lParam can be 0 for SC_MOVE; Windows tracks the mouse.
-						SendMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_MOVE | (HTCAPTION as i32)) as usize), LPARAM(0));
-						return LRESULT(0);
-					}
+					println!(" -> HT={}", ht);
 
-					// Otherwise start a SIZE on the correct edge/corner.
 					if let Some(wmsz) = ht_to_wmsz(ht) {
-						ReleaseCapture();
+						println!(" -> WM_SIZE={}", wmsz);
+						println!("{:x}", (SC_SIZE | wmsz) as usize);
 						// Passing 0 for lParam is fine; Windows captures and tracks.
-						SendMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE as usize) | wmsz), LPARAM(0));
+						SendMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE | wmsz) as usize), LPARAM(0));
 						return LRESULT(0);
 					}
 				}
@@ -800,21 +743,21 @@ mod hybrid_chrome {
 		DefWindowProcW(hwnd, msg, wparam, lparam)
 	}
 
-	fn ht_to_wmsz(ht: i32) -> Option<usize> {
+	fn ht_to_wmsz(ht: u32) -> Option<u32> {
 		match ht {
-			HTLEFT => Some(WMSZ_LEFT as usize),
-			HTRIGHT => Some(WMSZ_RIGHT as usize),
-			HTTOP => Some(WMSZ_TOP as usize),
-			HTBOTTOM => Some(WMSZ_BOTTOM as usize),
-			HTTOPLEFT => Some(WMSZ_TOPLEFT as usize),
-			HTTOPRIGHT => Some(WMSZ_TOPRIGHT as usize),
-			HTBOTTOMLEFT => Some(WMSZ_BOTTOMLEFT as usize),
-			HTBOTTOMRIGHT => Some(WMSZ_BOTTOMRIGHT as usize),
+			HTLEFT => Some(WMSZ_LEFT),
+			HTRIGHT => Some(WMSZ_RIGHT),
+			HTTOP => Some(WMSZ_TOP),
+			HTBOTTOM => Some(WMSZ_BOTTOM),
+			HTTOPLEFT => Some(WMSZ_TOPLEFT),
+			HTTOPRIGHT => Some(WMSZ_TOPRIGHT),
+			HTBOTTOMLEFT => Some(WMSZ_BOTTOMLEFT),
+			HTBOTTOMRIGHT => Some(WMSZ_BOTTOMRIGHT),
 			_ => None,
 		}
 	}
 
-	unsafe fn helper_hit(helper: HWND, sx: i32, sy: i32) -> i32 {
+	unsafe fn helper_hit(helper: HWND, sx: u32, sy: u32) -> u32 {
 		let mut r = RECT::default();
 		GetWindowRect(helper, &mut r);
 
