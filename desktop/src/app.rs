@@ -448,7 +448,7 @@ mod native_window_windows {
 		}
 	}
 
-	pub fn install(window: &Window) -> WindowsNativeWindowHandle {
+	pub(super) fn install(window: &Window) -> WindowsNativeWindowHandle {
 		let hwnd = match window.window_handle().expect("No window handle").as_raw() {
 			RawWindowHandle::Win32(h) => HWND(h.hwnd.get() as *mut std::ffi::c_void),
 			_ => panic!("Not a Win32 window"),
@@ -466,7 +466,7 @@ mod native_window_windows {
 		let helper = unsafe {
 			CreateWindowExW(
 				ex,
-				PCWSTR("HybridChromeResizeBand\0".encode_utf16().collect::<Vec<_>>().as_ptr()),
+				PCWSTR(HELPER_CLASS_NAME.encode_utf16().collect::<Vec<_>>().as_ptr()),
 				PCWSTR::null(),
 				style,
 				0,
@@ -498,30 +498,36 @@ mod native_window_windows {
 		unsafe { position_helper(hwnd, helper) };
 		let _ = unsafe { ShowWindow(helper, SW_SHOWNOACTIVATE) };
 
-		let mut top_glass: u32 = 1;
-		let got = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &mut top_glass as *mut _ as *mut _, size_of::<u32>() as u32) };
+		let mut boarder_size: u32 = 1;
+		let _ = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &mut boarder_size as *mut _ as *mut _, size_of::<u32>() as u32) };
 		let margins = MARGINS {
 			cxLeftWidth: 0,
 			cxRightWidth: 0,
 			cyBottomHeight: 0,
-			cyTopHeight: if got.is_ok() { top_glass as i32 } else { 1 },
+			cyTopHeight: boarder_size as i32,
 		};
 		let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) };
-
-		let mut style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as usize;
-		style &= !(WS_CAPTION.0 as usize);
-		style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as usize;
-		unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize) };
 
 		let _ = unsafe { SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER) };
 
 		WindowsNativeWindowHandle { hwnd }
 	}
 
-	static HELPER_CLASS_ATOM: OnceLock<u16> = OnceLock::new();
+	unsafe fn uninstall(hwnd: HWND) {
+		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
+			let _ = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc) };
+			if state.helper_hwnd.0 != null_mut() {
+				let _ = unsafe { DestroyWindow(state.helper_hwnd) };
+			}
+		}
+	}
+
+	const HELPER_CLASS_NAME: &str = "Helper\0";
+
+	static HELPER_CLASS_LOCK: OnceLock<u16> = OnceLock::new();
 	unsafe fn ensure_helper_class() {
-		let _ = *HELPER_CLASS_ATOM.get_or_init(|| {
-			let class_name: Vec<u16> = "HybridChromeResizeBand\0".encode_utf16().collect();
+		let _ = *HELPER_CLASS_LOCK.get_or_init(|| {
+			let class_name: Vec<u16> = HELPER_CLASS_NAME.encode_utf16().collect();
 			let wc = WNDCLASSW {
 				style: CS_HREDRAW | CS_VREDRAW,
 				lpfnWndProc: Some(helper_window_handle_message),
@@ -546,15 +552,6 @@ mod native_window_windows {
 	}
 	unsafe impl Send for State {}
 	unsafe impl Sync for State {}
-
-	unsafe fn uninstall(hwnd: HWND) {
-		if let Some(state) = state_map().lock().unwrap().remove(&(hwnd.0 as isize)) {
-			let _ = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, state.prev_wndproc) };
-			if state.helper_hwnd.0 != null_mut() {
-				let _ = unsafe { DestroyWindow(state.helper_hwnd) };
-			}
-		}
-	}
 
 	unsafe fn position_helper(owner: HWND, helper: HWND) {
 		let mut r = RECT::default();
