@@ -687,6 +687,8 @@ mod hybrid_chrome {
 					let sx = (lparam.0 & 0xFFFF) as i16 as i32;
 					let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
 
+					println!("WM_NCHITTEST at {},{}", sx, sy);
+
 					let mut wr = RECT::default();
 					GetWindowRect(hwnd, &mut wr);
 					let px = sx - wr.left;
@@ -760,8 +762,8 @@ mod hybrid_chrome {
 
 			// Let the system know which HT* we are under the cursor
 			WM_NCHITTEST => {
-				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
-				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
+				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
 				let ht = helper_hit(hwnd, sx, sy);
 				return LRESULT(ht as isize);
 			}
@@ -772,11 +774,11 @@ mod hybrid_chrome {
 				let owner = if !data.is_null() { (*data).owner } else { HWND::default() };
 
 				// Where are we? (screen coords)
-				let sx = (lparam.0 & 0xFFFF) as i16 as i32;
-				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+				let sx = (lparam.0 & 0xFFFF) as i16 as u32;
+				let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as u32;
 				let ht = helper_hit(hwnd, sx, sy);
 
-				if ht != HTTRANSPARENT && ht != HTCLIENT && owner.0 != std::ptr::null_mut() {
+				if ht != HTTRANSPARENT as u32 && ht as u32 != HTCLIENT && owner.0 != std::ptr::null_mut() {
 					// Send identical NC message to the owner *with* the HT code in wParam.
 					// The owner's DefWindowProc will “perform the appropriate action”
 					// (enter system move/size loop).
@@ -796,14 +798,14 @@ mod hybrid_chrome {
 		DefWindowProcW(hwnd, msg, wparam, lparam)
 	}
 
-	unsafe fn helper_hit(helper: HWND, sx: i32, sy: i32) -> i32 {
+	unsafe fn helper_hit(helper: HWND, sx: u32, sy: u32) -> u32 {
 		let mut r = RECT::default();
 		GetWindowRect(helper, &mut r);
 
-		let on_left = sx < r.left + RESIZE_BAND_THICKNESS;
-		let on_right = sx >= r.right - RESIZE_BAND_THICKNESS;
-		let on_top = sy < r.top + RESIZE_BAND_THICKNESS;
-		let on_bottom = sy >= r.bottom - RESIZE_BAND_THICKNESS;
+		let on_left = sx < (r.left + RESIZE_BAND_THICKNESS) as u32;
+		let on_right = sx >= (r.right - RESIZE_BAND_THICKNESS) as u32;
+		let on_top = sy < (r.top + RESIZE_BAND_THICKNESS) as u32;
+		let on_bottom = sy >= (r.bottom - RESIZE_BAND_THICKNESS) as u32;
 
 		if on_top && on_left {
 			return HTTOPLEFT;
@@ -829,6 +831,6 @@ mod hybrid_chrome {
 		if on_bottom {
 			return HTBOTTOM;
 		}
-		HTTRANSPARENT
+		HTTRANSPARENT as u32
 	}
 }
