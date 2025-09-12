@@ -495,6 +495,12 @@ mod hybrid_chrome {
 
 			install_impl(hwnd, opts.caption_height_px);
 
+			let mut style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+			style &= !(WS_CAPTION.0);
+			style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as u32;
+			SetWindowLongPtrW(hwnd, GWL_STYLE, style as isize);
+			SetWindowPos(hwnd, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+
 			let mut top_glass: u32 = 1;
 			let got = DwmGetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, &mut top_glass as *mut _ as *mut _, size_of::<u32>() as u32);
 			let margins = MARGINS {
@@ -725,13 +731,26 @@ mod hybrid_chrome {
 
 					println!(" -> HT={}", ht);
 
-					if let Some(wmsz) = ht_to_wmsz(ht) {
-						println!(" -> WM_SIZE={}", wmsz);
-						println!("{:x}", (SC_SIZE | wmsz) as usize);
-						// Passing 0 for lParam is fine; Windows captures and tracks.
-						SendMessageW(owner, WM_SYSCOMMAND, WPARAM((SC_SIZE | wmsz) as usize), LPARAM(0));
+					let Some(wmsz) = ht_to_wmsz(ht) else {
 						return LRESULT(0);
-					}
+					};
+
+					// SendMessageW(owner, WM_NCLBUTTONDOWN, WPARAM(ht as usize), LPARAM(packed as isize));
+					SetForegroundWindow(owner);
+
+					let mut style = GetWindowLongPtrW(owner, GWL_STYLE) as u32;
+					style &= !(WS_CAPTION.0);
+					style |= (WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0) as u32;
+					SetWindowLongPtrW(owner, GWL_STYLE, style as isize);
+					SetWindowPos(owner, HWND::default(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+
+					PostMessageW(
+						owner,
+						WM_SYSCOMMAND,
+						WPARAM((SC_SIZE + wmsz) as usize), // note: '+' and '|' are the same numerically here, but '+' matches docs
+						lparam,
+					);
+					return LRESULT(0);
 				}
 				// Not our ring → let other windows handle it.
 				return LRESULT(HTTRANSPARENT as isize);
