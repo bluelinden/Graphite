@@ -47,7 +47,7 @@ impl WinitApp {
 	pub(crate) fn new(cef_context: Box<dyn cef::CefContext>, window_size_sender: Sender<WindowSize>, wgpu_context: WgpuContext, event_loop_proxy: EventLoopProxy<CustomEvent>) -> Self {
 		let rendering_loop_proxy = event_loop_proxy.clone();
 		let (start_render_sender, start_render_receiver) = std::sync::mpsc::sync_channel(1);
-		std::thread::spawn(move || {
+		std::thread::Builder::new().name("graphite-node-graph".to_string()).spawn(move || {
 			loop {
 				let result = futures::executor::block_on(DesktopWrapper::execute_node_graph());
 				let _ = rendering_loop_proxy.send_event(CustomEvent::NodeGraphExecutionResult(result));

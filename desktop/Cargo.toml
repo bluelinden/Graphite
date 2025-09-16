@@ -10,14 +10,14 @@ rust-version = "1.87"
 
 [features]
 default = ["recommended", "embedded_resources"]
-recommended = ["gpu", "accelerated_paint"]
+recommended = ["gpu"]
 embedded_resources = ["dep:graphite-desktop-embedded-resources"]
 gpu = ["graphite-desktop-wrapper/gpu"]
 
 # Hardware acceleration features
 accelerated_paint = ["accelerated_paint_dmabuf", "accelerated_paint_d3d11", "accelerated_paint_iosurface"]
 accelerated_paint_dmabuf = ["libc", "ash"]
-accelerated_paint_d3d11 = ["windows", "ash"]
+accelerated_paint_d3d11 = ["ash"]
 accelerated_paint_iosurface = ["objc2-io-surface", "objc2-metal", "core-foundation"]
 
 [dependencies]
@@ -60,7 +60,7 @@ windows = { version = "0.58.0", features = [
 	"Win32_System_LibraryLoader",
 	"Win32_UI_Controls",
 	"Win32_UI_WindowsAndMessaging",
-], optional = true }
+] }
 
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
