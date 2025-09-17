@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use graphite_editor::messages::prelude::FrontendMessage;
+use wgpu_executor::RgbaBuffer;
 
 use super::DesktopWrapperMessageDispatcher;
 use super::messages::{DesktopFrontendMessage, Document, FileFilter, OpenFileDialogContext, SaveFileDialogContext};
@@ -59,6 +60,61 @@ pub(super) fn intercept_frontend_message(dispatcher: &mut DesktopWrapperMessageD
 				default_folder: None,
 				filters: Vec::new(),
 				context: SaveFileDialogContext::File { content },
+			});
+		}
+		FrontendMessage::TriggerExportImageBuffer { buffer, name, file_type } => {
+			let RgbaBuffer { width, height, data, bytes_per_pixel } = buffer;
+
+			if bytes_per_pixel != 4 {
+				tracing::error!("Expected 4 bytes per pixel for RGBA buffer, got {bytes_per_pixel}");
+				return None;
+			}
+
+			let mut encoded = Vec::with_capacity((width * height * 4) as usize);
+
+			use graphite_editor::messages::frontend::utility_types::FileType;
+			use image::ColorType;
+			use image::ImageEncoder;
+			match file_type {
+				FileType::Png => {
+					let result = image::codecs::png::PngEncoder::new(std::io::Cursor::new(&mut encoded)).write_image(&data, width, height, ColorType::Rgba8.into());
+					if let Err(err) = result {
+						tracing::error!("Failed to encode PNG: {err}");
+						return None;
+					}
+				}
+				FileType::Jpg => {
+					let result = image::codecs::jpeg::JpegEncoder::new(std::io::Cursor::new(&mut encoded)).write_image(&data, width, height, ColorType::Rgba8.into());
+					if let Err(err) = result {
+						tracing::error!("Failed to encode JPG: {err}");
+						return None;
+					}
+				}
+				FileType::Svg => {
+					tracing::error!("SVG cannot be exported from an image buffer");
+					return None;
+				}
+			}
+			let file_extension = match file_type {
+				FileType::Png => "png",
+				FileType::Jpg => "jpg",
+				FileType::Svg => unreachable!(),
+			};
+
+			let default_filename = if name.ends_with(&format!(".{file_extension}")) {
+				name
+			} else {
+				format!("{name}.{file_extension}")
+			};
+
+			println!("Successfully encoded image, size: {} bytes", encoded.len());
+
+			dispatcher.respond(DesktopFrontendMessage::SaveFileDialog {
+				title: "Export".to_string(),
+				default_filename,
+				default_folder: None,
+				filters: Vec::new(),
+				context: SaveFileDialogContext::File { content: encoded },
 			});
 		}
 		FrontendMessage::TriggerVisitLink { url } => {

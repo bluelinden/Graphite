@@ -103,6 +103,12 @@ impl WgpuExecutor {
 		Ok(output.unwrap().texture)
 	}
 
+	pub async fn render_vello_scene_to_rgba_buffer(&self, scene: &Scene, size: UVec2, context: &RenderContext, background: Color) -> Result<RgbaBuffer> {
+		let texture = self.render_vello_scene_to_texture(scene, size, context, background).await?;
+		let buffer = self.copy_texture_to_buffer(&texture).await?;
+		Ok(buffer)
+	}
+
 	async fn render_vello_scene_to_target_texture(&self, scene: &Scene, size: UVec2, context: &RenderContext, background: Color, output: &mut Option<TargetTexture>) -> Result<()> {
 		let size = size.max(UVec2::ONE);
 		let target_texture = if let Some(target_texture) = output
@@ -120,7 +126,7 @@ impl WgpuExecutor {
 				mip_level_count: 1,
 				sample_count: 1,
 				dimension: wgpu::TextureDimension::D2,
-				usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+				usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
 				format: VELLO_SURFACE_FORMAT,
 				view_formats: &[],
 			});
@@ -178,6 +184,72 @@ impl WgpuExecutor {
 			},
 		})
 	}
+
+	async fn copy_texture_to_buffer(&self, texture: &wgpu::Texture) -> anyhow::Result<RgbaBuffer> {
+		use wgpu::{TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo};
+
+		let size = texture.size();
+		let width = size.width;
+		let height = size.height;
+		let bytes_per_pixel = 4; // Assuming RGBA8Unorm or similar
+		let unpadded_bytes_per_row = width * bytes_per_pixel;
+
+		let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+		let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
+
+		let buffer_size = padded_bytes_per_row as u64 * height as u64;
+
+		let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("readback buffer"),
+			size: buffer_size,
+			usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+
+		let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+			label: Some("texture to buffer encoder"),
+		});
+
+		encoder.copy_texture_to_buffer(
+			TexelCopyTextureInfo {
+				texture,
+				mip_level: 0,
+				origin: wgpu::Origin3d::ZERO,
+				aspect: wgpu::TextureAspect::All,
+			},
+			TexelCopyBufferInfo {
+				buffer: &buffer,
+				layout: TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(padded_bytes_per_row),
+					rows_per_image: Some(height),
+				},
+			},
+			size,
+		);
+
+		self.context.queue.submit([encoder.finish()]);
+
+		let slice = buffer.slice(..);
+		let (tx, rx) = futures::channel::oneshot::channel();
+		slice.map_async(wgpu::MapMode::Read, move |res| {
+			let _ = tx.send(res);
+		});
+		let _ = self.context.device.poll(wgpu::PollType::Wait);
+		rx.await.unwrap().unwrap();
+
+		let view = slice.get_mapped_range();
+
+		let mut data = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
+		for chunk in view.chunks(padded_bytes_per_row as usize).take(height as usize) {
+			data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
+		}
+
+		drop(view);
+		buffer.unmap();
+
+		Ok(RgbaBuffer { data, width, height, bytes_per_pixel })
+	}
 }
 
 impl WgpuExecutor {
@@ -203,6 +275,24 @@ impl WgpuExecutor {
 			context,
 			vello_renderer: vello_renderer.into(),
 		})
+	}
+}
+
+#[derive(Hash, PartialEq, Eq, Clone, Default)]
+pub struct RgbaBuffer {
+	pub data: Vec<u8>,
+	pub width: u32,
+	pub height: u32,
+	pub bytes_per_pixel: u32,
+}
+impl std::fmt::Debug for RgbaBuffer {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("RgbaBuffer")
+			.field("data_length", &self.data.len())
+			.field("width", &self.width)
+			.field("height", &self.height)
+			.field("bytes_per_pixel", &self.bytes_per_pixel)
+			.finish()
 	}
 }
 
