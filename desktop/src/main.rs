@@ -98,19 +98,27 @@ async fn init_wgpu_context() -> WgpuContext {
 	let adapter_index = if let Some(index) = adapter_override
 		&& index < adapters.len()
 	{
-		index
+		Some(index)
 	} else if cfg!(target_os = "windows") {
-		match adapters.iter().enumerate().find(|(_, a)| a.get_info().backend == wgpu::Backend::Dx12) {
-			Some((index, _)) => index,
-			None => 0,
-		}
+		adapters.iter().enumerate().find(|(_, a)| a.get_info().backend == wgpu::Backend::Dx12).map(|(i, _)| i)
 	} else {
-		0 // Same behavior as requests adapter
+		None
 	};
 
-	tracing::info!("Using WGPU adapter {adapter_index}");
+	let adapter = if let Some(index) = adapter_index {
+		tracing::info!("Using WGPU adapter {index}");
+		adapters.remove(index)
+	} else {
+		tracing::info!("Requesting HighPerformance adapter from wgpu");
 
-	let adapter = adapters.remove(adapter_index);
+		let adapter_options = wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::HighPerformance,
+			compatible_surface: None,
+			force_fallback_adapter: false,
+		};
+
+		instance.request_adapter(&adapter_options).await.expect("Failed to request WGPU adapter")
+	};
 
 	WgpuContext::new_with_instance_and_adapter(instance, adapter)
 		.await
