@@ -18,7 +18,7 @@ graphite-editor = { path = "../../editor", features = [
 	"gpu",
 	"vello",
 ] }
-graphene-std = { workspace = true }
+graphene-std = { workspace = true, features = [ "shader-nodes" ] }
 graph-craft = { workspace = true }
 wgpu-executor = { workspace = true }
 
