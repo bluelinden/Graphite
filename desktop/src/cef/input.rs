@@ -246,6 +246,8 @@ impl ClickTracker {
 			return ClickCount::Single;
 		};
 
+		let previous = record.time;
+
 		let now = Instant::now();
 		record.time = now;
 		record.position = position;
@@ -271,7 +273,7 @@ impl ClickTracker {
 		let dx = position.x.abs_diff(record.position.x);
 		let dy = position.y.abs_diff(record.position.y);
 		let within_dist = dx <= MULTICLICK_ALLOWED_TRAVEL && dy <= MULTICLICK_ALLOWED_TRAVEL;
-		let within_time = now.saturating_duration_since(record.time) <= MULTICLICK_TIMEOUT;
+		let within_time = now.saturating_duration_since(previous) <= MULTICLICK_TIMEOUT;
 
 		let count = if within_time && within_dist { ClickCount::Double } else { ClickCount::Single };
 
