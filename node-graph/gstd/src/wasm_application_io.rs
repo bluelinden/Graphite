@@ -10,10 +10,11 @@ use graphene_core::raster_types::{CPU, Raster};
 use graphene_core::table::Table;
 use graphene_core::transform::Footprint;
 use graphene_core::vector::Vector;
-use graphene_core::{Color, Ctx};
+use graphene_core::{Color, Ctx, ExtractAnimationTime};
 use graphene_core::{Graphic, WasmNotSend};
 use graphene_svg_renderer::{Render, RenderParams, RenderSvgSegmentList, SvgRender};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::JsCast;
 #[cfg(target_family = "wasm")]
@@ -55,8 +56,16 @@ async fn get_request(_: impl Ctx, _primary: (), #[name("URL")] url: String, disc
 	response.text().await.ok().unwrap_or_default()
 }
 
+static LAST_SEND: AtomicU64 = AtomicU64::new(0);
+
 #[node_macro::node(category("Web Request"))]
-async fn post_request(_: impl Ctx, _primary: (), #[name("URL")] url: String, body: Vec<u8>, discard_result: bool) -> String {
+async fn post_request(ctx: impl Ctx + ExtractAnimationTime, _primary: (), #[name("URL")] url: String, body: Vec<u8>, discard_result: bool) -> String {
+	let time = ctx.try_animation_time().unwrap();
+	let last_time = f64::from_bits(LAST_SEND.load(std::sync::atomic::Ordering::SeqCst));
+	if time - last_time < 0.1 {
+		return String::new();
+	}
+	LAST_SEND.store(time.to_bits(), std::sync::atomic::Ordering::SeqCst);
 	#[cfg(target_family = "wasm")]
 	{
 		if discard_result {
