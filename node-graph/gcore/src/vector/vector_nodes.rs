@@ -649,7 +649,7 @@ fn bilinear_interpolate(t: DVec2, quad: &[DVec2; 4]) -> DVec2 {
 /// - For each shape, find the existing shelf with minimum remaining space that fits
 /// - Create new shelf only if no existing shelf can accommodate the shape
 /// Works as a reasonable approximation box packing problem
-#[node_macro::node(category("Vector"), path(graphene_core::vector))]
+#[node_macro::node(name("Pack by Bounds"), category("Vector"), path(graphene_core::vector))]
 async fn pack_by_bounds<I: 'n + Send + Clone>(
 	_: impl Ctx,
 	#[implementations(
