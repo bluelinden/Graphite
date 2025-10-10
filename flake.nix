@@ -82,8 +82,8 @@
           pkgs.cargo-flamegraph
         ];
 
-        cefEnv = import ./cef.nix { inherit pkgs; };
-        rustGPUEnv = import ./rust-gpu.nix { inherit pkgs; };
+        cefEnv = import ./.nix/cef.nix { inherit pkgs; };
+        rustGPUEnv = import ./.nix/rust-gpu.nix { inherit pkgs; };
 
         libPath = "${pkgs.lib.makeLibraryPath buildInputs}:${cefEnv.CEF_PATH}";
       in
@@ -102,11 +102,11 @@
         packages.default = pkgs.stdenv.mkDerivation(finalAttrs: {
           pname = "graphite-editor";
           version = "unstable";
-          src = pkgs.lib.cleanSource ./..;
+          src = pkgs.lib.cleanSource ./.;
 
           cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
             src = finalAttrs.src;
-            hash = "sha256-BVIQIZbGW19Rof0J7U2r6XFCUC52hb7+uaE1di4bV4A=";
+            hash = "sha256-/EqexPTVR1ufGsPwLv57fjmMsjENLPjnDPJI8JCzDZA=";
           };
 
           npmDeps = pkgs.fetchNpmDeps {
